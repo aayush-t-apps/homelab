@@ -2,13 +2,14 @@
 Description=Homelab camera: the live stream, and a photo of each movement; only while it's on
 Requires=homelab-firewall.service
 After=homelab-firewall.service network.target
-# Off: it doesn't start, now or at boot. On: homelab-camera.path starts it.
-ConditionPathExists=/var/lib/homelab/state/camera-on
 # Never give up restarting a camera that's on.
 StartLimitIntervalSec=0
 
 [Service]
 User=homelab
+# Off means off: checked at every start, restarts after a stop included (a unit Condition is only
+# checked on a fresh start, so a stopped camera came straight back). On: homelab-camera.path starts it.
+ExecCondition=/usr/bin/test -e /var/lib/homelab/state/camera-on
 ExecStart=/opt/homelab/lib/camera-run
 Restart=always
 RestartSec=3

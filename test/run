@@ -20,11 +20,11 @@ for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$port/snapshot" &&
 
 me=$(id -un)
 export ALARM_CONF=$t/alarm.conf HOMELAB_CONF=$t/homelab.conf HOMELAB_VAR=$t/var ALARM_BIN=$root/bin/alarm \
-  CAMERA_URL=http://127.0.0.1:$port HOMELAB_PROC=fake_mjpg HOMELAB_USER=$me SETTLE=0 \
+  CAMERA_URL=http://127.0.0.1:$port HOMELAB_PROC=fake_mjpg HOMELAB_USER=$me \
   CAMERA_SWITCH=$root/lib/camera-switch HOMELAB_DEFAULTS=$root/defaults.conf HOMELAB_LIB=$root/lib
 echo "ALARM_URL=http://127.0.0.1:$port/secret_topic_123" > "$ALARM_CONF"
-# This machine's settings win over the defaults: no frame bursts or alarm pacing, unless a test sets them.
-settings() { printf 'PAGE=https://home.example.ts.net:8443\nBURST=0\nALARM_EVERY=0\n%s\n' "$@" > "$HOMELAB_CONF"; }
+# This machine's settings win over the defaults: no waits, frame bursts or alarm pacing, unless a test sets them.
+settings() { printf 'PAGE=https://home.example.ts.net:8443\nFRAME_DELAY=0\nFRAME_GAP=0\nBURST=0\nALARM_EVERY=0\n%s\n' "$@" > "$HOMELAB_CONF"; }
 settings
 mkdir -p "$HOMELAB_VAR/state" "$HOMELAB_VAR/data/motion"
 motion=$HOMELAB_VAR/data/motion state=$HOMELAB_VAR/state
@@ -124,7 +124,7 @@ expect "and leaves no photo" is "$(find "$motion" -name '20261001_142100_*' | wc
 echo 0 > "$state/camera-started"
 
 # While something keeps moving: every photo on the page, an alarm at most every ALARM_EVERY.
-settings ALARM_EVERY=120
+settings ALARM_EVERY=30
 touch "$state/alarm-last"
 photo 20261001_142200_motion_6.0%.jpg 800
 lib/motion-send
@@ -135,21 +135,45 @@ photo 20261001_142400_motion_6.0%.jpg 700
 lib/motion-send
 expect "after ALARM_EVERY, the next one alarms" is "$(sent) $(last .query.filename)" "$((n + 1)) 20261001_142400_motion_6.0%.jpg"
 
-# Each alarm comes with a few more frames, a second apart: the first of them goes to the phone.
+# The alarm goes with a frame taken just after the movement began, then more frames follow for the page.
 settings BURST=2
 head -c 5555 /dev/urandom > "$t/snapshot"
+printf '#!/usr/bin/env bash\nls "%s" | grep -c "_motion_b" > "%s"\nexec "%s" "$@"\n' "$motion" "$t/frames-at-send" "$root/bin/alarm" > "$t/alarm-count-frames"
+chmod +x "$t/alarm-count-frames"
 photo 20261001_142600_motion_8.0%.jpg 600
-lib/motion-send
+ALARM_BIN=$t/alarm-count-frames lib/motion-send
 burst=$(find "$motion" -name '*_motion_b*.jpg' | wc -l)
-expect "an alarm takes two more frames" is "$burst" 2
-expect "and sends the first of them" is "$(last .query.filename | sed 's/^[0-9_]*//') $(last .body_len)" "motion_b1.jpg 5555"
-expect "all three are on the page" is "$(jq '[.photos[] | select(test("_142600_|_motion_b"))] | length' "$HOMELAB_VAR/data/status.json")" 3
+expect "an alarm takes its frame and two more" is "$burst" 3
+expect "and sends the first, a frame taken after the movement began" is "$(last .query.filename | sed 's/^[0-9_]*//') $(last .body_len)" "motion_b1.jpg 5555"
+expect "the alarm goes before the other frames are taken" is "$(cat "$t/frames-at-send")" 1
+expect "all of them are on the page" is "$(jq '[.photos[] | select(test("_142600_|_motion_b"))] | length' "$HOMELAB_VAR/data/status.json")" 4
 rm "$t/snapshot"
 photo 20261001_142800_motion_8.0%.jpg 500
 lib/motion-send 2>/dev/null
 expect "no frames from the camera: the first photo goes" is "$(last .query.filename)" "20261001_142800_motion_8.0%.jpg"
 settings
 find "$motion" -name '*.jpg' -delete
+
+# ntfy.sh allows 250 a day: past ALARMS_PER_DAY, one notice, and every photo still on the page.
+settings ALARMS_PER_DAY=2
+rm -f "$state/alarm-count"
+n=$(sent)
+for k in 1 2 3 4; do photo "20261001_1430${k}0_motion_5.0%.jpg" 400; lib/motion-send; done
+expect "two alarms, then one notice, then nothing more" is "$(sent) $(last .query.title)" "$((n + 3)) Motion alarms paused for today"
+expect "and the page still gets every photo" is "$(jq '[.photos[] | select(test("_1430"))] | length' "$HOMELAB_VAR/data/status.json")" 4
+echo "1999-01-01 99" > "$state/alarm-count"
+photo 20261001_143500_motion_5.0%.jpg 400
+lib/motion-send
+expect "a new day starts the count again" is "$(sent) $(last .query.title)" "$((n + 4)) Motion at home"
+expect "counting from one" is "$(cut -d' ' -f2 "$state/alarm-count")" 1
+settings
+find "$motion" -name '*.jpg' -delete
+
+# The camera is off means off: a unit Condition is only checked on a fresh start, so a stopped
+# camera restarted at once (found on the Pi); ExecCondition is checked at every start.
+expect "the camera service checks at every start that the camera is on" \
+  has "$(grep -h '^ExecCondition=' systemd/homelab-camera.service)" "state/camera-on"
+expect "and doesn't rely on a unit Condition" is "$(grep -c '^ConditionPathExists=' systemd/homelab-camera.service || true)" 0
 
 # check
 cp /bin/sleep "$t/fake_mjpg"

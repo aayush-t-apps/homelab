@@ -130,15 +130,16 @@
 
   // The live view: a new picture every second, light on mobile data; tap it for the smooth
   // stream. Paused while the page is hidden, and tried again if it drops.
-  let cameraOn = true, smooth = false, timer = 0;
+  let cameraOn = true, smooth = false, timer = 0, misses = 0;
   const view = $("stream");
   function next() {
     clearTimeout(timer);
     if (!cameraOn || document.hidden) { view.removeAttribute("src"); return; }
     if (smooth) { view.src = `/stream?${Date.now()}`; return; }
     const img = new Image();
-    img.onload = () => { view.src = img.src; timer = setTimeout(next, 1000); };
-    img.onerror = () => { timer = setTimeout(next, 5000); };
+    img.onload = () => { misses = 0; view.src = img.src; timer = setTimeout(next, 1000); };
+    // The camera gives each picture to whoever asks first: ask again soon, slow down if it keeps failing.
+    img.onerror = () => { timer = setTimeout(next, ++misses < 5 ? 300 : 5000); };
     img.src = `/snapshot?${Date.now()}`;
   }
   view.addEventListener("error", () => { if (smooth && cameraOn) timer = setTimeout(next, 5000); });

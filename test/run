@@ -96,6 +96,22 @@ lib/motion-send
 expect "and its photo goes next time" is "$(last .query.filename)" "20261001_141000_motion_7.0%.jpg"
 expect "and the note is cleared" is "$([ -e "$state/alarm-error" ] && echo there || echo gone)" gone
 
+photo 20261001_141500_motion_6.0%.jpg 1000 '30 seconds ago'
+echo "ALARM_URL=http://127.0.0.1:1/x" > "$t/unreachable.conf"
+ALARM_CONF=$t/unreachable.conf lib/motion-send 2>/dev/null
+expect "an alarm that can't reach the server is noted on one line, for the page" \
+  is "$(wc -l < "$state/alarm-error") $(grep -c "couldn't reach" "$state/alarm-error")" "1 1"
+lib/motion-send
+
+# A photo that lands while one is being sent goes too, before motion-send stops.
+printf '#!/usr/bin/env bash\n"%s" "$@" || exit\n[ -e "%s" ] || { touch "%s"; head -c 1500 /dev/urandom > "%s"; }\n' \
+  "$root/bin/alarm" "$t/moved" "$t/moved" "$motion/20261001_142000_motion_5.0%.jpg" > "$t/alarm-and-move"
+chmod +x "$t/alarm-and-move"
+photo 20261001_141900_motion_5.0%.jpg 1200 '10 seconds ago'
+n=$(sent)
+ALARM_BIN=$t/alarm-and-move lib/motion-send
+expect "a photo that lands during a send goes too" is "$(sent) $(last .query.filename)" "$((n + 2)) 20261001_142000_motion_5.0%.jpg"
+
 # check
 cp /bin/sleep "$t/fake_mjpg"
 camera_program() { "$t/fake_mjpg" 300 & fake=$!; }

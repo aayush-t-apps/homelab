@@ -74,8 +74,8 @@ One checked step at a time; a step that fails says what to fix:
 "Camera offline" within 3 minutes; plug it back in: "Camera back". Tap **Turn off** when done.
 
 Running it again is safe: it changes only what's different, and keeps your settings, topic,
-switch and photos. After a wipe, `sudo ./install --topic <your topic>` (ntfy shows it) keeps the
-topic you're subscribed to.
+switch and photos. After a wipe, `sudo ./install --topic` keeps the topic you're subscribed to:
+it asks for it (ntfy shows it), so it never shows on a command line.
 
 ## Every day
 
@@ -121,7 +121,7 @@ alarm -p 5 -g warning "Water" "The leak sensor is wet" photo.jpg
 | exit 2 | wrong arguments: the usage is on stderr |
 
 - **Who may send:** root and the `alarm` group (`sudo usermod -aG alarm <user>`).
-- **Another machine:** put this repo there and run `sudo ./install alarm --topic <your topic>`.
+- **Another machine:** put this repo there and run `sudo ./install alarm --topic` (it asks for the topic).
   It installs only the command; the same topic is the same place on your phone.
 - **A caller handles failure itself:** `alarm … || echo "alarm not sent" >&2`. Don't hide it.
 - **Somewhere that can't run the command** sends the same fields to the topic over HTTPS (ntfy's
@@ -163,7 +163,7 @@ Logs: `journalctl -u 'homelab-*'`. Status: `systemctl list-units 'homelab-*'`.
 
 - **ntfy.sh, free:** 250 alarms a day, photos up to 15 MB, kept there 3 hours (then only on your
   phone and here). For more, or for photos that never leave home, run your own ntfy server and
-  `sudo ./install --topic https://your.server/topic`.
+  give `sudo ./install --topic` its address: `https://your.server/topic`.
 - **Pixel motion,** not people: light changes and pets can trip it. `--zones` and `--motion` tune it.
 
 ## What's where

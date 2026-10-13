@@ -9,6 +9,7 @@ ExecStart=/opt/homelab/lib/camera-run
 Restart=always
 RestartSec=3
 ReadWritePaths=/var/lib/homelab/data
+InaccessiblePaths=/etc/homelab/alarm.conf
 # Sandboxed: no view of /home or /srv, nothing to change but its own folder.
 ProtectSystem=strict
 ProtectHome=yes

@@ -1,5 +1,7 @@
 [Unit]
 Description=Homelab: send the newest motion photo as an alarm
+# Motion can come often (a short --cooldown): never stop starting it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

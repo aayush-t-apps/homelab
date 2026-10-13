@@ -15,7 +15,7 @@ send() { # priority tags title message
   if err=$("$alarm" -p "$1" -g "$2" -u "${PAGE:-}" "$3" "$4" 2>&1 >/dev/null); then
     rm -f "$state/alarm-error"
   else
-    echo "$now $err" > "$state/alarm-error"
+    echo "$now ${err//$'\n'/ }" > "$state/alarm-error"
     echo "not sent: $err" >&2
   fi
 }
@@ -24,11 +24,13 @@ send() { # priority tags title message
 
 # Live means a snapshot that changes: a camera that drops out leaves the last picture behind
 # (mjpg-streamer keeps running), so the same picture three minutes in a row counts as stopped.
-# One minute with no answer may be a restart (a switch, a replug): two in a row count.
+# One minute with no answer may be a restart (a switch, a replug): two in a row count. The camera
+# program answers one snapshot per frame, to whoever asks first (the page asks every second), so a
+# snapshot that comes back empty is asked again.
 snap=$(mktemp)
 trap 'rm -f "$snap"' EXIT
 live=yes note=''
-if curl -sf -m 10 -o "$snap" "$camera/snapshot" && [ -s "$snap" ]; then
+if curl -sf -m 10 --retry 2 --retry-delay 1 --retry-all-errors -o "$snap" "$camera/snapshot" && [ -s "$snap" ]; then
   rm -f "$state/miss"
   hash=$(sha256sum < "$snap" | cut -d' ' -f1)
   same=0

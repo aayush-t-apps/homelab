@@ -6,7 +6,8 @@
 #   sudo ./install alarm           only the alarm command (another machine that should raise alarms)
 #   sudo ./install remove [--yes]  take everything away again
 #
-#   --topic NAME|URL               use this alarm topic: after a wipe, or to share one between machines
+#   --topic                        use an alarm topic you have (after a wipe, or for another machine):
+#                                  it asks for it, so it never shows on a command line
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -27,7 +28,7 @@ asked=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
     alarm | remove) mode=$1 ;;
-    --topic) topic=${2:-}; [ -n "$topic" ] || fail "--topic needs a name"; shift ;;
+    --topic) topic=ask ;;
     --yes) yes=1 ;;
     -h | --help) usage ;;
     *) printf 'unknown: %s\n\n' "$1" >&2; usage 2 ;;
@@ -42,8 +43,8 @@ fi
 
 packages() {
   local missing=() p
-  for p in "$@"; do # there if apt has it, or its command is here (pkgconf gives pkg-config)
-    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || command -v "$p" >/dev/null ||
+  for p in "$@"; do # there if apt has it, or its command is in /usr/bin (pkgconf gives pkg-config)
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || [ -x "/usr/bin/$p" ] ||
       missing+=("$p")
   done
   if [ "${#missing[@]}" -gt 0 ]; then
@@ -63,13 +64,15 @@ page_url() {
 
 alarms() {
   step "Alarms"
-  getent group alarm >/dev/null || groupadd --system alarm
-  ok "group alarm: root and its members may send alarms"
   install -d -m 755 "$ETC"
+  if ! getent group alarm >/dev/null; then groupadd --system alarm && touch "$ETC/.made-alarm-group"; fi
+  ok "group alarm: root and its members may send alarms"
   local conf=$ETC/alarm.conf url=
   if [ -n "$topic" ]; then
+    if [ -t 0 ]; then read -r -s -p "  Your topic (as ntfy shows it; it won't show here): " topic; echo
+    else read -r topic; fi
+    [ -n "$topic" ] || fail "no topic given"
     case $topic in *://*) url=$topic ;; *) url=https://ntfy.sh/$topic ;; esac
-    new_topic=1
   elif [ -r "$conf" ]; then
     url=$(sed -n 's/^ALARM_URL=//p' "$conf" | tail -n 1)
   fi
@@ -77,7 +80,7 @@ alarms() {
     url=https://ntfy.sh/homelab-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
     new_topic=1
   fi
-  [[ $url =~ $URL_RE ]] || fail "'$url' isn't a topic: use letters, digits, - and _ (up to 64)"
+  [[ $url =~ $URL_RE ]] || fail "that isn't a topic: use letters, digits, - and _ (up to 64)"
   (
     umask 027
     printf '# Your alarm topic. Whoever knows it can read your alarms: keep it private.\nALARM_URL=%s\n' "$url" > "$conf.new"
@@ -151,7 +154,14 @@ files() {
   install -m 644 "$here/www/index.html" "$OPT/www/"
   ok "$OPT: the programs and the page"
   if [ -f "$ETC/homelab.conf" ]; then
-    ok "$ETC/homelab.conf: kept your settings"
+    local url
+    url=$(page_url)
+    if grep -q '^PAGE=$' "$ETC/homelab.conf" && [ -n "$url" ]; then
+      sed -i "s|^PAGE=$|PAGE=$url|" "$ETC/homelab.conf"
+      ok "$ETC/homelab.conf: kept your settings, and added the page's link"
+    else
+      ok "$ETC/homelab.conf: kept your settings"
+    fi
   else
     local cam=/dev/video0 c
     for c in /dev/v4l/by-id/*-video-index0; do [ -e "$c" ] && cam=$c && break; done
@@ -201,13 +211,19 @@ page() {
     warn "no Tailscale here: no page (alarms still work). Set up Tailscale, then run this again"
     return
   fi
+  tailscale status --json | jq -e '.CertDomains | length > 0' >/dev/null ||
+    fail "turn on HTTPS for your tailnet (Tailscale admin console, DNS, HTTPS Certificates), then run this again"
   { tailscale serve --bg --https=8443 --set-path / "$OPT/www" &&
     tailscale serve --bg --https=8443 --set-path /data "$VAR/data" &&
     tailscale serve --bg --https=8443 --set-path /stream http://127.0.0.1:8080/stream &&
     tailscale serve --bg --https=8443 --set-path /snapshot http://127.0.0.1:8080/snapshot &&
     tailscale serve --bg --https=8443 --set-path /api http://127.0.0.1:8081/api; } >/dev/null ||
-    fail "Tailscale didn't take the page (above): HTTPS must be on for your tailnet (Tailscale admin, DNS)"
-  ok "$(page_url)"
+    fail "Tailscale didn't take the page (above)"
+  local host
+  host=$(page_url) host=${host#https://}
+  tailscale serve status --json | jq -e --arg k "$host" '.Web[$k].Handlers | has("/") and has("/api")' >/dev/null ||
+    fail "Tailscale doesn't show the page on port 8443: tailscale serve status"
+  ok "https://$host"
 }
 
 checks() {
@@ -218,9 +234,9 @@ checks() {
   for _ in $(seq 20); do curl -sf -m 3 -o "$snap" http://127.0.0.1:8080/snapshot && break; sleep 1; done
   if [ -s "$snap" ]; then
     ok "the camera streams"
-    if runuser -u nobody -- curl -s -m 3 -o /dev/null http://127.0.0.1:8080/snapshot; then
-      fail "other users here can open the camera: the firewall isn't on (journalctl -u homelab-firewall)"
-    fi
+    local rc=0
+    runuser -u nobody -- curl -s -m 3 -o /dev/null http://127.0.0.1:8080/snapshot || rc=$?
+    [ "$rc" = 7 ] || fail "other users here can open the camera: the firewall isn't on (journalctl -u homelab-firewall)"
     ok "other users on this machine can't open it"
   else
     warn "the camera isn't streaming yet: $(journalctl -u homelab-camera -n 1 --no-pager -o cat)"
@@ -230,7 +246,6 @@ checks() {
   ok "the page's switch answers (and refuses requests not from the page)"
   systemctl start homelab-check.service || fail "the camera check failed: journalctl -u homelab-check"
   ok "the camera check ran"
-  subscribe
   if [ -s "$snap" ]; then
     alarm -p 3 -g house -u "$(page_url)" "Home is set up" "This is how alarms look; the photo is the camera now." "$snap"
   else
@@ -254,11 +269,13 @@ remove() {
   systemctl disable -q "${SERVICES[@]}" 2>/dev/null || true
   rm -f "$UNITS"/homelab-{firewall.service,camera.service,motion.path,motion.service,check.timer,check.service,api.socket,api@.service}
   systemctl daemon-reload
-  tailscale serve --https=8443 off >/dev/null 2>&1 || true
+  if [ -d "$OPT/www" ]; then tailscale serve --https=8443 off >/dev/null 2>&1 || true; fi
+  local ours=''
+  if [ -e "$ETC/.made-alarm-group" ]; then ours=1; fi
   rm -rf "$OPT" "$VAR" "$ETC"
   rm -f /usr/local/bin/alarm
   if id homelab >/dev/null 2>&1; then userdel homelab; fi
-  if getent group alarm >/dev/null; then groupdel alarm; fi
+  if [ -n "$ours" ] && getent group alarm >/dev/null; then groupdel alarm; fi
   ok "removed. The build packages stay (apt autoremove won't take them; remove them by hand if you like)"
 }
 
@@ -281,6 +298,7 @@ case $mode in
     packages cmake build-essential git pkg-config libjpeg-dev libturbojpeg0-dev libcurl4-openssl-dev \
       v4l-utils curl jq nftables
     alarms
+    subscribe
     camera_user
     build
     files

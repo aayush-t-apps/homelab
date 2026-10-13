@@ -2,6 +2,7 @@
 # homelab-motion: sends the newest motion photo as an alarm (homelab-motion.path runs it when one lands).
 # Photos that arrive together go as one alarm: the newest, saying how many came with it. If the
 # alarm can't be sent, the photo stays unsent and goes with the next one; the page shows why.
+# Photos that land while it sends are looked for again before it stops.
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${HOMELAB_CONF:-/etc/homelab/homelab.conf}"
@@ -12,18 +13,21 @@ motion=$var/data/motion sent=$var/state/motion-sent
 # A new file wakes this up as soon as it's created: give the camera a moment to finish writing it.
 sleep "${SETTLE:-1}"
 [ -e "$sent" ] || touch -d @0 "$sent"
-mapfile -t new < <(find "$motion" -maxdepth 1 -name '*_motion_*.jpg' ! -name 'debug_*' -newer "$sent" \
-  -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-)
-[ "${#new[@]}" -gt 0 ] || exit 0
+while :; do
+  mapfile -t new < <(find "$motion" -maxdepth 1 -name '*_motion_*.jpg' ! -name 'debug_*' -newer "$sent" \
+    -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-)
+  [ "${#new[@]}" -gt 0 ] || exit 0
 
-latest=${new[-1]}
-message="Seen at $(date -r "$latest" +%H:%M). Tap to watch live."
-[ "${#new[@]}" -eq 1 ] || message+=" $(( ${#new[@]} - 1 )) more since the last alarm."
+  latest=${new[-1]}
+  message="Seen at $(date -r "$latest" +%H:%M). Tap to watch live."
+  [ "${#new[@]}" -eq 1 ] || message+=" $(( ${#new[@]} - 1 )) more since the last alarm."
 
-if err=$("$alarm" -p 4 -g rotating_light -u "${PAGE:-}" "Motion at home" "$message" "$latest" 2>&1 >/dev/null); then
-  touch -r "$latest" "$sent"
-  rm -f "$var/state/alarm-error"
-else
-  echo "$(date -Iseconds) $err" > "$var/state/alarm-error"
-  echo "not sent: $err" >&2
-fi
+  if err=$("$alarm" -p 4 -g rotating_light -u "${PAGE:-}" "Motion at home" "$message" "$latest" 2>&1 >/dev/null); then
+    touch -r "$latest" "$sent"
+    rm -f "$var/state/alarm-error"
+  else
+    echo "$(date -Iseconds) ${err//$'\n'/ }" > "$var/state/alarm-error"
+    echo "not sent: $err" >&2
+    exit 0
+  fi
+done

@@ -16,6 +16,11 @@ MJPG_REPO=https://github.com/350d/mjpg-streamer.git
 MJPG_COMMIT=3f178a01873149ce95c9defd2525c1795bfea9ad # tested on homepi, 2026-10-12
 ETC=/etc/homelab OPT=/opt/homelab VAR=/var/lib/homelab UNITS=/etc/systemd/system
 URL_RE='^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]{1,64}$'
+# What an earlier install wrote into homelab.conf as defaults (they're in defaults.conf now).
+OLD_DEFAULTS='SIZE=1280x720
+FPS=15
+MOTION="--downscale 4 --motion 5 --sequence 2 --nframe 2 --cooldown 120"
+KEEP_DAYS=7'
 SERVICES=(homelab-firewall.service homelab-camera.service homelab-camera.path homelab-motion.path homelab-check.timer homelab-api.socket)
 
 step() { printf '\n%s\n' "$*"; }
@@ -91,6 +96,33 @@ alarms() {
   curl --help all 2>/dev/null | grep -q -- '--url-query' || fail "curl is too old (7.87 or later): sudo apt-get install curl"
   install -m 755 "$here/bin/alarm" /usr/local/bin/alarm
   ok "command: alarm \"title\" \"message\" [photo]"
+}
+
+# This machine's settings: the camera, the page, and only what you change. Homelab's defaults are
+# in $OPT/defaults.conf, so an update can improve them; a line here wins over its default.
+settings() {
+  local conf=$ETC/homelab.conf url cam=/dev/video0 c
+  url=$(page_url)
+  if [ ! -f "$conf" ]; then
+    for c in /dev/v4l/by-id/*-video-index0; do [ -e "$c" ] && cam=$c && break; done
+    printf 'CAMERA=%s\nPAGE=%s\n' "$cam" "$url" > "$conf"
+    ok "$conf: written (camera $cam)"
+  else
+    # Lines an earlier install wrote as defaults belong in defaults.conf now: yours stay.
+    grep -vxF -f <(printf '%s\n' "$OLD_DEFAULTS") "$conf" | grep -v '^# ' > "$conf.new" || true
+    mv "$conf.new" "$conf"
+    ok "$conf: kept your settings"
+  fi
+  if grep -q '^PAGE=$' "$conf" && [ -n "$url" ]; then
+    sed -i "s|^PAGE=$|PAGE=$url|" "$conf"
+    ok "$conf: added the page's link"
+  fi
+  { printf '%s\n' "# This machine's homelab settings: the camera, the page, and anything you change. Homelab's" \
+      "# defaults are in $OPT/defaults.conf: copy a line here to change it, and yours wins." \
+      "# After a change: sudo systemctl restart homelab-camera"
+    cat "$conf"; } > "$conf.new"
+  chmod 644 "$conf.new"
+  mv "$conf.new" "$conf"
 }
 
 updates() {
@@ -175,36 +207,9 @@ files() {
   for f in "$here"/lib/*; do install -m 755 "$f" "$OPT/lib/"; done
   for f in "$OPT"/lib/*; do [ -e "$here/lib/${f##*/}" ] || rm -f "$f"; done # none left from older versions
   install -m 644 "$here/www/index.html" "$OPT/www/"
-  ok "$OPT: the programs and the page"
-  if [ -f "$ETC/homelab.conf" ]; then
-    local url
-    url=$(page_url)
-    if grep -q '^PAGE=$' "$ETC/homelab.conf" && [ -n "$url" ]; then
-      sed -i "s|^PAGE=$|PAGE=$url|" "$ETC/homelab.conf"
-      ok "$ETC/homelab.conf: kept your settings, and added the page's link"
-    else
-      ok "$ETC/homelab.conf: kept your settings"
-    fi
-  else
-    local cam=/dev/video0 c
-    for c in /dev/v4l/by-id/*-video-index0; do [ -e "$c" ] && cam=$c && break; done
-    cat > "$ETC/homelab.conf" <<EOF
-# Homelab settings. After a change: sudo systemctl restart homelab-camera
-# The camera. Its by-id name stays the same when you plug it into another port.
-CAMERA=$cam
-SIZE=1280x720
-FPS=15
-# Motion (mjpg-streamer's motion plugin): --motion how much must change (%), --sequence frames
-# in a row, --nframe check every nth frame, --downscale shrink first, --cooldown seconds between
-# photos; --zones focuses on parts of the picture (README). Long names only: -l doesn't work.
-MOTION="--downscale 4 --motion 5 --sequence 2 --nframe 2 --cooldown 120"
-# Motion photos older than this many days are deleted.
-KEEP_DAYS=7
-# The page your phone opens when you tap an alarm.
-PAGE=$(page_url)
-EOF
-    ok "$ETC/homelab.conf: written (camera $cam)"
-  fi
+  install -m 644 "$here/defaults.conf" "$OPT/"
+  ok "$OPT: the programs, the page and homelab's defaults"
+  settings
   install -d -m 750 -o homelab -g homelab "$VAR" "$VAR/state" "$VAR/data" "$VAR/data/motion"
   [ -e "$VAR/state/motion-sent" ] || install -m 640 -o homelab -g homelab /dev/null "$VAR/state/motion-sent"
   ok "$VAR: photos and state, the homelab user's only"
@@ -262,6 +267,8 @@ checks() {
   local tmp snap rc=0
   tmp=$(mktemp -d)
   snap=$tmp/camera.jpg
+  # shellcheck source=/dev/null
+  . "$OPT/defaults.conf"
   # shellcheck source=/dev/null
   . "$ETC/homelab.conf"
   if [ -e "$VAR/state/camera-on" ]; then

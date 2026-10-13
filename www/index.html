@@ -87,7 +87,7 @@
   </header>
 
   <div class="view" id="view">
-    <button class="picture" id="picture" type="button" aria-label="Watch smoothly (uses more data)" hidden>
+    <button class="picture" id="picture" type="button" aria-label="Use less data: a picture a second" hidden>
       <img id="stream" alt="The camera, live">
     </button>
     <span class="badge" id="live" hidden>Live</span>
@@ -130,9 +130,9 @@
   // What we know: the switch (camera.json, at once) and the minute check (status.json).
   let switched = null, status = null, seen = false, problem = "";
 
-  // The live view: a new picture every second, light on mobile data; tap it for the smooth
-  // stream. Only while the camera is on and the page is showing; tried again if it drops.
-  let watching = false, smooth = false, timer = 0, misses = 0;
+  // The live view: smooth, or a picture a second when your phone asks to save data. Tap it to
+  // switch. Only while the camera is on and the page is showing; tried again if it drops.
+  let watching = false, smooth = !(navigator.connection && navigator.connection.saveData), timer = 0, misses = 0;
   const view = $("stream");
   function next() {
     clearTimeout(timer);
@@ -148,12 +148,12 @@
     img.src = `/snapshot?${Date.now()}`;
   }
   view.addEventListener("error", () => { if (smooth && watching) timer = setTimeout(next, 5000); });
-  $("picture").addEventListener("click", () => {
-    smooth = !smooth;
-    $("live").textContent = smooth ? "Live, smooth" : "Live";
-    $("picture").setAttribute("aria-label", smooth ? "Back to one picture a second" : "Watch smoothly (uses more data)");
-    next();
-  });
+  function label() {
+    $("live").textContent = smooth ? "Live" : "Live, a picture a second";
+    $("picture").setAttribute("aria-label", smooth ? "Use less data: a picture a second" : "Watch smoothly");
+  }
+  $("picture").addEventListener("click", () => { smooth = !smooth; label(); next(); });
+  label();
   document.addEventListener("visibilitychange", next);
 
   function render() {
@@ -243,7 +243,7 @@
   }
 
   refresh();
-  setInterval(refresh, 30000);
+  setInterval(refresh, 10000);
 </script>
 </body>
 </html>

@@ -1,7 +1,8 @@
 # Homelab: agent guide
 
-The home camera, its motion alarms, its page, and the `alarm` command (README.md). The owner
-applies every change on the machine with `sudo ./install`: your work ends at a PR.
+The home camera, its motion alarms, its page, and the `alarm` command (README.md). Your work ends
+at a PR; the owner's merge is the approval, and each machine installs `main` by itself the next
+day (`lib/update`). So `main` must always install cleanly: CI runs the checks below on every PR.
 
 ## Rules
 

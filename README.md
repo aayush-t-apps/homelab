@@ -47,17 +47,21 @@ How things talk:
   Other users, such as a Shipify box's agent runs, can't.
 - **Whoever knows the topic** can read your alarms and their photos, so it's long and random and
   never appears in a command line, a log, the page or this repo. To replace it:
-  `sudo rm /etc/homelab/alarm.conf && sudo ./install`, then subscribe to the new one.
+  `sudo rm /etc/homelab/alarm.conf && sudo /opt/homelab/src/install`, then subscribe to the new one.
 
 ## Set it up
 
 **On your phone, once:** install **ntfy** and **Tailscale**.
 
-**On the machine with the camera:** plug the camera in, put this repo there, and run:
+**On the machine with the camera:** plug the camera in, and run:
 
 ```
-sudo ./install
+sudo git clone https://github.com/aayush-t-apps/homelab /opt/homelab/src
+sudo /opt/homelab/src/install
 ```
+
+(No git? `sudo apt install -y git` first. For only the alarm command, the second line is
+`sudo /opt/homelab/src/install alarm --topic`.)
 
 One checked step at a time; a step that fails says what to fix:
 
@@ -68,13 +72,14 @@ One checked step at a time; a step that fails says what to fix:
 5. writes the settings, starts the services, and opens the page on Tailscale at
    `https://<machine>.<tailnet>.ts.net:8443`;
 6. shows you the topic: in ntfy tap **+**, enter it, tap **Subscribe**, then press Enter;
-7. checks it all, and sends a test alarm with the camera's picture.
+7. checks it all, and sends a test alarm with the camera's picture;
+8. sets up the daily update (below).
 
 **Try it:** open the page, tap **Turn on**, wave at the camera: a photo arrives. Unplug it:
 "Camera offline" within 3 minutes; plug it back in: "Camera back". Tap **Turn off** when done.
 
 Running it again is safe: it changes only what's different, and keeps your settings, topic,
-switch and photos. After a wipe, `sudo ./install --topic` keeps the topic you're subscribed to:
+switch and photos. After a wipe, `sudo /opt/homelab/src/install --topic` keeps the topic you're subscribed to:
 it asks for it (ntfy shows it), so it never shows on a command line.
 
 ## Every day
@@ -121,7 +126,8 @@ alarm -p 5 -g warning "Water" "The leak sensor is wet" photo.jpg
 | exit 2 | wrong arguments: the usage is on stderr |
 
 - **Who may send:** root and the `alarm` group (`sudo usermod -aG alarm <user>`).
-- **Another machine:** put this repo there and run `sudo ./install alarm --topic` (it asks for the topic).
+- **Another machine:** clone this repo there as in "Set it up", and run
+  `sudo /opt/homelab/src/install alarm --topic` (it asks for the topic).
   It installs only the command; the same topic is the same place on your phone.
 - **A caller handles failure itself:** `alarm … || echo "alarm not sent" >&2`. Don't hide it.
 - **Somewhere that can't run the command** sends the same fields to the topic over HTTPS (ntfy's
@@ -134,22 +140,29 @@ Homelab shares homepi with a Shipify box. They don't touch:
 
 - **Shipify talks; homelab alarms.** Shipify's work and replies stay in Shipify's chats, and
   nothing of Shipify calls `alarm`. Shipify can change this repo by a PR (`homelab: …`), tested by
-  its CI; you apply a merged change here with `sudo ./install`. Nothing deploys from GitHub.
+  its CI; your merge is the approval, and the machine installs it the next morning (Updates).
 - **Its own user, folders and services:** `homelab`; `/opt/homelab`, `/etc/homelab`,
   `/var/lib/homelab`; `homelab-*`. Each service is sandboxed: no view of `/home` or `/srv`, and
   it writes only to its own folder.
 
-## Update, or remove
+## Updates, and removing it
 
-- **Update:** get the new files here (`git pull`, or copy), then `sudo ./install`.
-- **Remove:** `sudo ./install remove` takes away the services, page, programs, settings, topic,
-  photos, user and group. The build packages stay.
+- **Updates come by themselves,** daily at about 04:30: a change merged on `main` is installed the
+  way you would by hand (your merge is the approval). If only docs or tests changed, nothing
+  restarts. You get a quiet "Homelab updated", or a loud alarm saying why it couldn't; a failed
+  update is tried again the next day, and the version running stays as it was.
+- **Now, not at 04:30:** `sudo systemctl start homelab-update`. **Never:**
+  `sudo systemctl disable --now homelab-update.timer`.
+- **Don't edit `/opt/homelab/src`:** it follows `main`, and a change made there stops the updates
+  (the alarm says so). Changes go by a PR.
+- **Remove:** `sudo /opt/homelab/src/install remove` takes away the services, page, programs, this
+  copy, settings, topic, photos, user and group. The build packages stay.
 
 ## When something's wrong
 
 | You see | Do |
 |---|---|
-| No alarms at all | Subscribed to the topic in ntfy? Muted? Motion alarms on? `sudo ./install` again sends a test alarm |
+| No alarms at all | Subscribed to the topic in ntfy? Muted? Motion alarms on? Running the install again at the machine sends a test alarm |
 | "Camera offline" and it stays | Plug the camera in, or try another USB port. `journalctl -u homelab-camera -n 20` |
 | Too many motion alarms | Raise `--motion` or `--cooldown`, or use `--zones` to skip a busy part |
 | Missed motion | Lower `--motion` or `--sequence` |
@@ -163,7 +176,7 @@ Logs: `journalctl -u 'homelab-*'`. Status: `systemctl list-units 'homelab-*'`.
 
 - **ntfy.sh, free:** 250 alarms a day, photos up to 15 MB, kept there 3 hours (then only on your
   phone and here). For more, or for photos that never leave home, run your own ntfy server and
-  give `sudo ./install --topic` its address: `https://your.server/topic`.
+  give `install --topic` its address: `https://your.server/topic`.
 - **Pixel motion,** not people: light changes and pets can trip it. `--zones` and `--motion` tune it.
 
 ## What's where
@@ -177,6 +190,7 @@ Logs: `journalctl -u 'homelab-*'`. Status: `systemctl list-units 'homelab-*'`.
 | `lib/check` | the minute check: camera health, the page's status, old photos |
 | `lib/motion-switch`, `lib/api` | the switch, and the page's way to it |
 | `lib/firewall` | the rule that keeps other users here out |
-| `systemd/` | the services: `homelab-camera`, `homelab-motion` (path), `homelab-check` (timer), `homelab-api` (socket), `homelab-firewall` |
+| `lib/update` | the daily update |
+| `systemd/` | the services: `homelab-camera`, `homelab-motion` (path), `homelab-check` (timer), `homelab-api` (socket), `homelab-firewall`, `homelab-update` (timer) |
 | `www/index.html` | the page |
 | `test/run` | the tests, against a stand-in for ntfy and the camera |

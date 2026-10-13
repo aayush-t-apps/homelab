@@ -189,11 +189,64 @@ expect "with the right length" has "$answer" "Content-Length: ${#body}"
 expect "and the camera looks for motion" is "$([ -e "$state/motion-on" ] && echo yes)" yes
 expect "off works too" is "$(ask "POST /api/motion/off HTTP/1.1" "X-Homelab: 1" | code) $([ -e "$state/motion-on" ] && echo yes || echo no)" "200 no"
 
+# update: a throwaway origin, a clone of it, and a stand-in install
+g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
+change() { # path, then commit and push it
+  echo "$RANDOM" >> "$t/work/$1"
+  g -C "$t/work" add -A && g -C "$t/work" commit -qm "Change $1" && g -C "$t/work" push -q origin main
+}
+g init -q --bare "$t/origin.git"
+g init -q "$t/work"
+mkdir -p "$t/work/lib"
+g -C "$t/work" remote add origin "$t/origin.git"
+change lib/x
+g clone -q "$t/origin.git" "$t/src"
+cat > "$t/stub-install" <<STUB
+#!/usr/bin/env bash
+echo run >> "$t/install-calls"
+if [ -e "$t/install-fails" ]; then echo "  ✗ the build failed: the end of its log is above"; exit 1; fi
+git -C "$t/src" rev-parse HEAD > "$t/installed"
+STUB
+chmod +x "$t/stub-install"
+calls() { [ -f "$t/install-calls" ] && wc -l < "$t/install-calls" || echo 0; }
+export HOMELAB_SRC=$t/src HOMELAB_INSTALLED=$t/installed HOMELAB_INSTALL=$t/stub-install
+git -C "$t/src" rev-parse HEAD > "$t/installed"
+
+n=$(sent)
+lib/update
+expect "nothing new: no install, no alarm" is "$(calls) $(sent)" "0 $n"
+change lib/x
+lib/update
+expect "new code: it installs" is "$(calls)" 1
+expect "and says so quietly" is "$(last '.query.title + " " + .query.priority + " " + .body')" "Homelab updated on $(hostname) 2 Change lib/x"
+change README.md
+n=$(sent)
+lib/update
+expect "only docs: no install, no alarm" is "$(calls) $(sent)" "1 $n"
+expect "and it counts as installed" is "$(cat "$t/installed")" "$(git -C "$t/src" rev-parse HEAD)"
+change lib/x
+touch "$t/install-fails"
+lib/update 2>/dev/null || true
+expect "a failed install alarms loudly" is "$(last '.query.title + " " + .query.priority')" "Homelab didn't update on $(hostname) 4"
+expect "with why" has "$(last .body)" "the build failed"
+rm "$t/install-fails"
+lib/update
+expect "and is tried again next time" is "$(calls) $(last .query.title)" "3 Homelab updated on $(hostname)"
+echo local >> "$t/src/lib/x"
+g -C "$t/src" commit -qam "a change made on the machine"
+change lib/x
+lib/update 2>/dev/null || true
+expect "a copy changed on the machine isn't overwritten" has "$(last .body)" "was changed here"
+git -C "$t/src" remote set-url origin "$t/nowhere.git"
+lib/update 2>/dev/null || true
+expect "an unreachable repo says so" has "$(last .body)" "Couldn't reach the repo"
+unset HOMELAB_SRC HOMELAB_INSTALLED HOMELAB_INSTALL
+
 # The services start in an order systemd can keep at boot (a socket can't wait for an ordinary service).
 if command -v systemd-analyze >/dev/null; then
   mkdir "$t/units"
   cp systemd/* "$t/units/"
-  printf '[Unit]\nWants=basic.target homelab-firewall.service homelab-camera.service homelab-api.socket homelab-check.timer homelab-motion.path\nAfter=basic.target\n' > "$t/units/boot.target"
+  printf '[Unit]\nWants=basic.target homelab-firewall.service homelab-camera.service homelab-api.socket homelab-check.timer homelab-motion.path homelab-update.timer\nAfter=basic.target\n' > "$t/units/boot.target"
   order=$(cd "$t/units" || exit; SYSTEMD_UNIT_PATH=$t/units: systemd-analyze verify --man=no boot.target 2>&1 | grep -i 'ordering cycle' || true)
   expect "the services start in an order systemd can keep at boot" is "$order" ""
 fi

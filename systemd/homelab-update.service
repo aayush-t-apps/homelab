@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab: install what's merged on main (daily); tells you when it updated or why it couldn't
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/homelab/lib/update
+Nice=10

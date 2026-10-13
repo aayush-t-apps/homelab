@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# homelab-update, daily: installs what's merged on main, the way you would by hand. Your merge is
+# the approval. Only docs or tests changed: nothing restarts. It tells you quietly when it updated,
+# and loudly why when it couldn't; a failed update is tried again next time.
+set -uo pipefail
+src=${HOMELAB_SRC:-/opt/homelab/src}
+installed_file=${HOMELAB_INSTALLED:-/opt/homelab/installed}
+install=${HOMELAB_INSTALL:-$src/install}
+alarm=${ALARM_BIN:-alarm}
+
+tell() { "$alarm" -p "$1" -g "$2" "$3" "$4" >/dev/null || echo "alarm not sent: $3" >&2; }
+fail() {
+  echo "$1" >&2
+  tell 4 warning "Homelab didn't update on $(hostname)" "$1"
+  exit 1
+}
+
+out=$(git -C "$src" fetch -q origin main 2>&1) || fail "Couldn't reach the repo: ${out//$'\n'/ }"
+out=$(git -C "$src" merge -q --ff-only origin/main 2>&1) ||
+  fail "The copy in $src was changed here, so it can't follow main: ${out//$'\n'/ }"
+new=$(git -C "$src" rev-parse HEAD)
+installed=$(cat "$installed_file" 2>/dev/null || true)
+[ "$installed" != "$new" ] || exit 0
+
+if [ -n "$installed" ] && git -C "$src" cat-file -e "$installed^{commit}" 2>/dev/null &&
+  ! git -C "$src" diff --name-only "$installed" "$new" | grep -qvE '^(README\.md|AGENTS\.md|test/|\.github/)'; then
+  echo "$new" > "$installed_file" # only docs or tests: nothing to install
+  exit 0
+fi
+
+mode=()
+[ "$(cat /etc/homelab/mode 2>/dev/null)" != alarm ] || mode=(alarm)
+out=$("$install" "${mode[@]}" < /dev/null 2>&1) ||
+  fail "The install stopped: $(printf '%s\n' "$out" | grep '✗' | tail -n 1 | sed 's/^ *✗ //'). It tries again tomorrow."
+tell 2 arrows_counterclockwise "Homelab updated on $(hostname)" "$(git -C "$src" log -1 --format=%s)"

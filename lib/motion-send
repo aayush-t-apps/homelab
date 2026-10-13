@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# home-motion: a new motion photo, sent as an alarm (home-motion.path runs it when one lands).
+# homelab-motion: a new motion photo, sent as an alarm (homelab-motion.path runs it when one lands).
 # - The first WARMUP seconds after the camera starts are its light settling: those photos go.
-# - Each alarm comes with a few more frames, a second apart (BURST), so you see what happened: all
-#   go on the page, and the first of them, with whoever moved further in, goes to your phone. If the
-#   camera can't give them, the first photo goes.
+# - The alarm comes fast: the phone gets a frame taken FRAME_DELAY seconds after the movement began,
+#   so whoever moved is in it. Then BURST more frames, FRAME_GAP apart, go on the page: you see
+#   what happened. If the camera can't give a frame, the first photo goes.
 # - While something keeps moving, the page gets every photo and your phone an alarm at most every
-#   ALARM_EVERY seconds, saying how many photos came since the last one.
+#   ALARM_EVERY seconds, saying how many photos came since the last one. ALARMS_PER_DAY keeps the
+#   day under ntfy.sh's free limit: past it, one notice, and the page still gets every photo.
 # - An alarm that can't be sent stays to send with the next photo; the page shows why.
 set -euo pipefail
 # shellcheck source=/dev/null
@@ -16,16 +17,34 @@ var=${HOMELAB_VAR:-/var/lib/homelab}
 alarm=${ALARM_BIN:-alarm}
 url=${CAMERA_URL:-http://127.0.0.1:8080}
 lib=${HOMELAB_LIB:-/opt/homelab/lib}
-motion=$var/data/motion state=$var/state sent=$var/state/motion-sent last=$var/state/alarm-last
+motion=$var/data/motion state=$var/state
+sent=$state/motion-sent last=$state/alarm-last count=$state/alarm-count
 
-# A new file wakes this up as soon as it's created: give the camera a moment to finish writing it.
-sleep "${SETTLE:-1}"
+# A new file wakes this up as soon as it's created; the camera writes it in a moment.
+sleep "${FRAME_DELAY:-0.5}"
 [ -e "$sent" ] || touch -d @0 "$sent"
 [ -e "$last" ] || touch -d @0 "$last"
 
 new_photos() { # oldest first
   find "$motion" -maxdepth 1 -name '*_motion_*.jpg' ! -name 'debug_*' -newer "$1" -printf '%T@ %p\n' |
     sort -n | cut -d' ' -f2-
+}
+
+frame() { # n: a frame from the camera now, as a motion photo; prints its path, or nothing
+  local f
+  f=$motion/$(date +%Y%m%d_%H%M%S)_motion_b$1.jpg
+  if curl -sf -m 5 --retry 2 --retry-delay 0 --retry-all-errors -o "$f.new" "$url/snapshot" && [ -s "$f.new" ]; then
+    mv "$f.new" "$f"
+    echo "$f"
+  else
+    rm -f "$f.new"
+  fi
+}
+
+sent_today() { # how many alarms went today
+  local day='' n=''
+  if [ -r "$count" ]; then read -r day n < "$count"; fi
+  if [ "${day:-}" = "$(date +%F)" ]; then echo "${n:-0}"; else echo 0; fi
 }
 
 while :; do
@@ -38,37 +57,49 @@ while :; do
     rm -f -- "${new[@]}" # the camera's light settling, not someone
     continue
   fi
-  if [ $(( $(date +%s) - $(date -r "$last" +%s) )) -lt "${ALARM_EVERY:-120}" ]; then
+  if [ $(( $(date +%s) - $(date -r "$last" +%s) )) -lt "${ALARM_EVERY:-30}" ]; then
     touch -r "$latest" "$sent" # on the page; the phone heard a moment ago
     continue
   fi
+  today=$(sent_today)
+  if [ "$today" -gt "${ALARMS_PER_DAY:-200}" ]; then
+    touch -r "$latest" "$sent" # past the day's limit: on the page only
+    continue
+  fi
+  if [ "$today" -eq "${ALARMS_PER_DAY:-200}" ]; then
+    "$alarm" -p 3 -g no_bell "Motion alarms paused for today" \
+      "$today alarms went today, near ntfy.sh's free daily limit. Photos still show on the page; alarms return at midnight." || true
+    echo "$(date +%F) $((today + 1))" > "$count"
+    touch -r "$latest" "$sent"
+    continue
+  fi
 
-  # A few more frames, a second apart: who moved, and where they went.
-  burst=()
-  for i in $(seq 1 "${BURST:-2}"); do
-    [ "$i" = 1 ] || sleep 1
-    frame=$motion/$(date +%Y%m%d_%H%M%S)_motion_b$i.jpg
-    if curl -sf -m 5 --retry 2 --retry-delay 0 --retry-all-errors -o "$frame.new" "$url/snapshot" && [ -s "$frame.new" ]; then
-      mv "$frame.new" "$frame"
-      burst+=("$frame")
-    else
-      rm -f "$frame.new"
-    fi
-  done
-  photo=$latest newest=$latest
-  if [ "${#burst[@]}" -gt 0 ]; then photo=${burst[0]} newest=${burst[-1]}; fi
-  count=$(new_photos "$last" | wc -l)
+  # The alarm's frame, quickly: whoever moved is further in than at the first moment.
+  photo=$latest
+  first=$(frame 1)
+  [ -z "$first" ] || photo=$first
+  n=$(new_photos "$last" | wc -l)
   message="Seen at $(date -r "$latest" +%H:%M:%S). Tap to watch live."
-  [ "$count" -le 2 ] || message+=" $count photos since the last alarm, on the page."
+  [ "$n" -le 2 ] || message+=" $n photos since the last alarm, on the page."
 
   if err=$("$alarm" -p 4 -g rotating_light -u "${PAGE:-}" "Motion at home" "$message" "$photo" 2>&1 >/dev/null); then
-    touch -r "$newest" "$sent"
     touch "$last"
+    echo "$(date +%F) $((today + 1))" > "$count"
     rm -f "$state/alarm-error"
   else
     echo "$(date -Iseconds) ${err//$'\n'/ }" > "$state/alarm-error"
     echo "not sent: $err" >&2
     break
   fi
+
+  # Then a few more frames for the page, after the alarm has gone.
+  newest=$photo
+  for i in $(seq 1 "${BURST:-3}"); do
+    sleep "${FRAME_GAP:-0.5}"
+    more=$(frame $((i + 1)))
+    [ -z "$more" ] || newest=$more
+  done
+  touch -r "$newest" "$sent"
+  "$lib/status" # the page shows them now, not at the next check
 done
 "$lib/status" # the page shows new photos now, not at the next check

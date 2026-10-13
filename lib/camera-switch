@@ -20,5 +20,5 @@ rm -f "$var/state/miss" "$var/state/same" "$var/state/hash" "$var/state/note"
 jq -n --arg camera "$1" --arg since "$(cat "$var/state/since")" '{camera: $camera, since: $since}' > "$var/data/camera.json.new"
 mv "$var/data/camera.json.new" "$var/data/camera.json"
 "${HOMELAB_LIB:-/opt/homelab/lib}/status"
-# Off: stop it now; while off, systemd won't start it again (ConditionPathExists).
+# Off: stop it now; while off, systemd won't start it again (the service's ExecCondition).
 [ "$1" = on ] || pkill -x -u "$user" "${HOMELAB_PROC:-mjpg_streamer}" || true

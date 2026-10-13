@@ -21,11 +21,13 @@ runs for it.
   The machine remembers it, through restarts and updates.
 - **On,** [mjpg-streamer](https://github.com/350d/mjpg-streamer) (at the version tested here)
   streams the camera at 1280x720, and its motion plugin saves a photo when something moves.
-  - **Your phone** gets an alarm within about two seconds, with a frame taken a second after the
-    movement began, so whoever moved is in it.
-  - **The page** gets that photo and two more frames a second apart, so you see what happened; and
+  - **Your phone** gets an alarm about a second after you walk into view, with a frame taken half a
+    second after the movement began, so whoever moved is in it.
+  - **The page** then gets three more frames, half a second apart, so you see what happened; and
     while something keeps moving, a photo every 10 seconds.
-  - **Alarms are paced:** at most one every 2 minutes, saying how many photos came since the last.
+  - **Alarms are paced:** at most one every 30 seconds, saying how many photos came since the last,
+    and at most 200 a day. ntfy.sh's free limit is 250 a day: past 200 you get one notice, the page
+    still gets every photo, and alarms return at midnight.
   - **Light isn't someone:** the first 10 seconds after the camera starts (its light settling)
     and a change of almost the whole picture at once (a lamp switched on) are ignored.
 - **Camera health,** while it's on: a check every minute. If the picture stops (unplugged, or
@@ -113,8 +115,10 @@ Two files, read in this order:
 | `PAGE` | the page an alarm opens | found by install |
 | `SIZE`, `FPS` | picture size, frames per second | `1280x720`, `15` |
 | `MOTION` | `--motion`: how much must change, in % (lower is more sensitive) · `--overload`: more than this changing at once is the light, ignored · `--sequence`: frames in a row · `--cooldown`: seconds between photos · `--zones 3_000010020`: watch only parts (a 3×3 grid, weight 0 to 9 each, left to right, top to bottom) | `--motion 5 --overload 90 --sequence 2 --cooldown 10` |
-| `BURST` | more frames with each alarm, a second apart | `2` |
-| `ALARM_EVERY` | seconds between alarms while something keeps moving | `120` |
+| `FRAME_DELAY` | seconds after the movement began, for the alarm's frame | `0.5` |
+| `BURST`, `FRAME_GAP` | more frames for the page after the alarm, and the seconds between them | `3`, `0.5` |
+| `ALARM_EVERY` | seconds between alarms while something keeps moving | `30` |
+| `ALARMS_PER_DAY` | alarms a day before a notice and a pause until midnight | `200` |
 | `WARMUP` | seconds after the camera starts in which movement is ignored | `10` |
 | `KEEP_DAYS` | days to keep motion photos | `7` |
 

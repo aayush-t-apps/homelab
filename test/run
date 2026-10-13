@@ -21,9 +21,11 @@ for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$port/snapshot" &&
 me=$(id -un)
 export ALARM_CONF=$t/alarm.conf HOMELAB_CONF=$t/homelab.conf HOMELAB_VAR=$t/var ALARM_BIN=$root/bin/alarm \
   CAMERA_URL=http://127.0.0.1:$port HOMELAB_PROC=fake_mjpg HOMELAB_USER=$me SETTLE=0 \
-  CAMERA_SWITCH=$root/lib/camera-switch
+  CAMERA_SWITCH=$root/lib/camera-switch HOMELAB_DEFAULTS=$root/defaults.conf HOMELAB_LIB=$root/lib
 echo "ALARM_URL=http://127.0.0.1:$port/secret_topic_123" > "$ALARM_CONF"
-printf 'KEEP_DAYS=7\nPAGE=https://home.example.ts.net:8443\n' > "$HOMELAB_CONF"
+# This machine's settings win over the defaults: no frame bursts or alarm pacing, unless a test sets them.
+settings() { printf 'PAGE=https://home.example.ts.net:8443\nBURST=0\nALARM_EVERY=0\n%s\n' "$@" > "$HOMELAB_CONF"; }
+settings
 mkdir -p "$HOMELAB_VAR/state" "$HOMELAB_VAR/data/motion"
 motion=$HOMELAB_VAR/data/motion state=$HOMELAB_VAR/state
 
@@ -82,7 +84,7 @@ photo debug_20261001_140500_frame1_motion_9.5%_current.jpg 100 '5 minutes ago'
 lib/motion-send
 expect "new photos make one alarm" is "$(sent)" "$((n + 1))"
 expect "with the newest photo" is "$(last .query.filename) $(last .body_len)" "20261001_140500_motion_9.5%.jpg 4000"
-expect "saying how many came with it" has "$(last .query.message)" "1 more since the last alarm"
+expect "saying when" has "$(last .query.message)" "Seen at $(date -r "$motion/20261001_140500_motion_9.5%.jpg" +%H:%M:%S)"
 expect "and its title and link" is "$(last '.query.title + "|" + .query.click')" "Motion at home|https://home.example.ts.net:8443"
 lib/motion-send
 expect "a sent photo isn't sent again" is "$(sent)" "$((n + 1))"
@@ -111,6 +113,43 @@ photo 20261001_141900_motion_5.0%.jpg 1200 '10 seconds ago'
 n=$(sent)
 ALARM_BIN=$t/alarm-and-move lib/motion-send
 expect "a photo that lands during a send goes too" is "$(sent) $(last .query.filename)" "$((n + 2)) 20261001_142000_motion_5.0%.jpg"
+
+# The camera's light settling, in its first seconds, isn't someone.
+date +%s > "$state/camera-started"
+photo 20261001_142100_motion_7.0%.jpg 900
+n=$(sent)
+lib/motion-send
+expect "movement in the warm-up makes no alarm" is "$(sent)" "$n"
+expect "and leaves no photo" is "$(find "$motion" -name '20261001_142100_*' | wc -l)" 0
+echo 0 > "$state/camera-started"
+
+# While something keeps moving: every photo on the page, an alarm at most every ALARM_EVERY.
+settings ALARM_EVERY=120
+touch "$state/alarm-last"
+photo 20261001_142200_motion_6.0%.jpg 800
+lib/motion-send
+expect "a photo soon after an alarm makes none" is "$(sent)" "$n"
+expect "but is on the page at once" is "$(jq -r '.photos[0]' "$HOMELAB_VAR/data/status.json")" "20261001_142200_motion_6.0%.jpg"
+touch -d '3 minutes ago' "$state/alarm-last"
+photo 20261001_142400_motion_6.0%.jpg 700
+lib/motion-send
+expect "after ALARM_EVERY, the next one alarms" is "$(sent) $(last .query.filename)" "$((n + 1)) 20261001_142400_motion_6.0%.jpg"
+
+# Each alarm comes with a few more frames, a second apart: the first of them goes to the phone.
+settings BURST=2
+head -c 5555 /dev/urandom > "$t/snapshot"
+photo 20261001_142600_motion_8.0%.jpg 600
+lib/motion-send
+burst=$(find "$motion" -name '*_motion_b*.jpg' | wc -l)
+expect "an alarm takes two more frames" is "$burst" 2
+expect "and sends the first of them" is "$(last .query.filename | sed 's/^[0-9_]*//') $(last .body_len)" "motion_b1.jpg 5555"
+expect "all three are on the page" is "$(jq '[.photos[] | select(test("_142600_|_motion_b"))] | length' "$HOMELAB_VAR/data/status.json")" 3
+rm "$t/snapshot"
+photo 20261001_142800_motion_8.0%.jpg 500
+lib/motion-send 2>/dev/null
+expect "no frames from the camera: the first photo goes" is "$(last .query.filename)" "20261001_142800_motion_8.0%.jpg"
+settings
+find "$motion" -name '*.jpg' -delete
 
 # check
 cp /bin/sleep "$t/fake_mjpg"

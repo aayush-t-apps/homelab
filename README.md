@@ -20,8 +20,14 @@ runs for it.
   or saved, and nothing runs for it. Turn it on from the page when you leave, off when you're back.
   The machine remembers it, through restarts and updates.
 - **On,** [mjpg-streamer](https://github.com/350d/mjpg-streamer) (at the version tested here)
-  streams the camera, and its motion plugin saves a photo of each movement. That photo goes to your
-  phone at once.
+  streams the camera at 1280x720, and its motion plugin saves a photo when something moves.
+  - **Your phone** gets an alarm within about two seconds, with a frame taken a second after the
+    movement began, so whoever moved is in it.
+  - **The page** gets that photo and two more frames a second apart, so you see what happened; and
+    while something keeps moving, a photo every 10 seconds.
+  - **Alarms are paced:** at most one every 2 minutes, saying how many photos came since the last.
+  - **Light isn't someone:** the first 10 seconds after the camera starts (its light settling)
+    and a change of almost the whole picture at once (a lamp switched on) are ignored.
 - **Camera health,** while it's on: a check every minute. If the picture stops (unplugged, or
   stuck), you hear once, it restarts by itself, and you hear again when it's back.
 - **The page:** the live view, the switch, the camera's state and the last week's motion photos.
@@ -32,7 +38,7 @@ runs for it.
 | What | Where | Who can read it |
 |---|---|---|
 | **The alarm topic**, the only secret | `/etc/homelab/alarm.conf` on each machine that sends, and your ntfy app | root and the `alarm` group |
-| Settings | `/etc/homelab/homelab.conf` | anyone on the machine (no secrets) |
+| Settings | `/etc/homelab/homelab.conf` (this machine's), `/opt/homelab/defaults.conf` (homelab's) | anyone on the machine (no secrets) |
 | Motion photos and state | `/var/lib/homelab` | the `homelab` user and root |
 | Programs and the page | `/opt/homelab`, `/usr/local/bin/alarm` | anyone (it's this repo) |
 | The code | this repo | no secrets in it, ever |
@@ -87,21 +93,30 @@ it asks for it (ntfy shows it), so it never shows on a command line.
 ## Every day
 
 - **Leaving:** open the page, **Turn on**. **Back:** **Turn off**.
-- **An alarm:** tap it for the page. The picture refreshes every second; tap the picture for the
-  smooth live view, which uses much more data.
+- **An alarm:** tap it for the page. The live view is smooth (about 7 Mbit/s); tap the picture for
+  one picture a second, which saves mobile data (it starts that way when your phone saves data).
 - **Someone else** can subscribe to the same topic in their ntfy app.
 
 ## Settings
 
-`/etc/homelab/homelab.conf`; after a change, `sudo systemctl restart homelab-camera`.
+Two files, read in this order:
 
-| Setting | What it does |
-|---|---|
-| `CAMERA` | which camera (its `/dev/v4l/by-id/…` name stays the same in any USB port) |
-| `SIZE`, `FPS` | picture size and frames per second |
-| `MOTION` | `--motion 5`: how much must change (%), lower is more sensitive · `--sequence 2`: frames in a row · `--cooldown 120`: seconds between photos · `--zones 3_000010020`: watch only parts (a 3×3 grid, weight 0 to 9 each, left to right, top to bottom) |
-| `KEEP_DAYS` | days to keep motion photos |
-| `PAGE` | the page an alarm opens |
+- **`/opt/homelab/defaults.conf`:** homelab's defaults, from this repo. Don't edit it: an update
+  replaces it, and can improve it.
+- **`/etc/homelab/homelab.conf`:** this machine's camera and page, and anything you change. Copy a
+  line from the defaults here and change it: yours wins, through every update. After a change,
+  `sudo systemctl restart homelab-camera`.
+
+| Setting | What it does | Default |
+|---|---|---|
+| `CAMERA` | which camera (its `/dev/v4l/by-id/…` name stays the same in any USB port) | found by install |
+| `PAGE` | the page an alarm opens | found by install |
+| `SIZE`, `FPS` | picture size, frames per second | `1280x720`, `15` |
+| `MOTION` | `--motion`: how much must change, in % (lower is more sensitive) · `--overload`: more than this changing at once is the light, ignored · `--sequence`: frames in a row · `--cooldown`: seconds between photos · `--zones 3_000010020`: watch only parts (a 3×3 grid, weight 0 to 9 each, left to right, top to bottom) | `--motion 5 --overload 90 --sequence 2 --cooldown 10` |
+| `BURST` | more frames with each alarm, a second apart | `2` |
+| `ALARM_EVERY` | seconds between alarms while something keeps moving | `120` |
+| `WARMUP` | seconds after the camera starts in which movement is ignored | `10` |
+| `KEEP_DAYS` | days to keep motion photos | `7` |
 
 Use the long option names: the motion plugin doesn't take `-l`.
 
@@ -189,7 +204,9 @@ Logs: `journalctl -u 'homelab-*'`. Status: `systemctl list-units 'homelab-*'`.
 | `bin/alarm` | the alarm command |
 | `lib/camera-run` | starts the camera program (only while the camera is on) |
 | `lib/motion-send` | sends a new motion photo as an alarm |
-| `lib/check` | the minute check: camera health, the page's status, old photos |
+| `lib/check` | the minute check: camera health and old photos |
+| `lib/status` | the page's status: written by the check, a new photo and the switch |
+| `defaults.conf` | homelab's settings, before this machine's own |
 | `lib/camera-switch`, `lib/api` | the camera's switch, and the page's way to it |
 | `lib/firewall` | the rule that keeps other users here out |
 | `lib/update` | the daily update |

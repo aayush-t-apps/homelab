@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# The page's status (data/status.json): the camera (live, offline or off), its last change, the
+# newest photos and the last alarm that didn't send. The check writes it every minute; a new photo
+# and the switch write it at once. Written whole, then moved into place.
+set -euo pipefail
+var=${HOMELAB_VAR:-/var/lib/homelab}
+state=$var/state motion=$var/data/motion
+
+camera=off
+if [ -e "$state/camera-on" ]; then
+  camera=live
+  [ "$(cat "$state/camera" 2>/dev/null)" != off ] || camera=offline
+fi
+photos=$(find "$motion" -maxdepth 1 -name '*_motion_*.jpg' ! -name 'debug_*' -printf '%T@ %f\n' \
+  | sort -rn | sed -n '1,24p' | cut -d' ' -f2-)
+today=$(find "$motion" -maxdepth 1 -name "$(date +%Y%m%d)_*_motion_*.jpg" ! -name 'debug_*' | wc -l)
+new=$(mktemp "$var/data/.status.XXXXXX")
+jq -n \
+  --arg camera "$camera" \
+  --arg since "$(cat "$state/since" 2>/dev/null || date -Iseconds)" \
+  --arg note "$(cat "$state/note" 2>/dev/null || true)" \
+  --arg alarm_error "$(cat "$state/alarm-error" 2>/dev/null || true)" \
+  --argjson today "$today" \
+  --arg photos "$photos" \
+  --arg updated "$(date -Iseconds)" \
+  '{camera: $camera, since: $since, note: $note, alarm_error: $alarm_error,
+    motion_today: $today, photos: ($photos | split("\n") | map(select(length > 0))),
+    updated: $updated}' > "$new"
+chmod 644 "$new"
+mv "$new" "$var/data/status.json"

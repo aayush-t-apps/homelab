@@ -16,7 +16,7 @@ MJPG_REPO=https://github.com/350d/mjpg-streamer.git
 MJPG_COMMIT=3f178a01873149ce95c9defd2525c1795bfea9ad # tested on homepi, 2026-10-12
 ETC=/etc/homelab OPT=/opt/homelab VAR=/var/lib/homelab UNITS=/etc/systemd/system
 URL_RE='^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]{1,64}$'
-SERVICES=(homelab-firewall.service homelab-camera.service homelab-motion.path homelab-check.timer homelab-api.socket)
+SERVICES=(homelab-firewall.service homelab-camera.service homelab-camera.path homelab-motion.path homelab-check.timer homelab-api.socket)
 
 step() { printf '\n%s\n' "$*"; }
 ok() { printf '  ✓ %s\n' "$*"; }
@@ -171,7 +171,9 @@ build() {
 files() {
   step "Files"
   install -d -m 755 "$OPT/lib" "$OPT/www"
-  install -m 755 "$here"/lib/{camera-run,motion-send,check,firewall,api,motion-switch} "$OPT/lib/"
+  local f
+  for f in "$here"/lib/*; do install -m 755 "$f" "$OPT/lib/"; done
+  for f in "$OPT"/lib/*; do [ -e "$here/lib/${f##*/}" ] || rm -f "$f"; done # none left from older versions
   install -m 644 "$here/www/index.html" "$OPT/www/"
   ok "$OPT: the programs and the page"
   if [ -f "$ETC/homelab.conf" ]; then
@@ -206,11 +208,12 @@ EOF
   install -d -m 750 -o homelab -g homelab "$VAR" "$VAR/state" "$VAR/data" "$VAR/data/motion"
   [ -e "$VAR/state/motion-sent" ] || install -m 640 -o homelab -g homelab /dev/null "$VAR/state/motion-sent"
   ok "$VAR: photos and state, the homelab user's only"
-  if [ ! -e "$VAR/data/motion.json" ]; then
-    runuser -u homelab -- "$OPT/lib/motion-switch" off
-    ok "motion alarms: off to start (turn them on from the page when you leave)"
+  rm -f "$VAR/state/motion-on" "$VAR/data/motion.json" # an older version's switch
+  if [ ! -e "$VAR/data/camera.json" ]; then
+    "$OPT/lib/camera-switch" off
+    ok "camera: off to start (turn it on from the page when you leave)"
   else
-    ok "motion alarms: kept $(jq -r .motion "$VAR/data/motion.json")"
+    ok "camera: kept $(jq -r .camera "$VAR/data/camera.json")"
   fi
 }
 
@@ -220,13 +223,17 @@ services() {
   for u in "$here"/systemd/*; do
     case $u in *homelab-update.*) ;; *) install -m 644 "$u" "$UNITS/" ;; esac # updates(): clones only
   done
+  for u in "$UNITS"/homelab-*; do # none left from older versions
+    case ${u##*/} in homelab-update.*) continue ;; esac
+    [ -e "$here/systemd/${u##*/}" ] || { systemctl disable -q --now "${u##*/}" 2>/dev/null || true; rm -f "$u"; }
+  done
   systemctl daemon-reload
   systemctl enable -q "${SERVICES[@]}"
   if ! { systemctl restart homelab-firewall.service homelab-camera.service homelab-api.socket &&
-    systemctl start homelab-motion.path; }; then
+    systemctl start homelab-camera.path homelab-motion.path; }; then
     fail "a service didn't start: journalctl -u 'homelab-*' -n 20"
   fi
-  ok "camera, motion photos, check (every minute), switch, firewall: on now and at every start"
+  ok "camera (while it's on), motion photos, check (every minute), switch, firewall: now and at every start"
 }
 
 page() {
@@ -252,20 +259,24 @@ page() {
 
 checks() {
   step "Checks"
-  local tmp snap
+  local tmp snap rc=0
   tmp=$(mktemp -d)
   snap=$tmp/camera.jpg
-  for _ in $(seq 20); do curl -sf -m 3 -o "$snap" http://127.0.0.1:8080/snapshot && break; sleep 1; done
-  if [ -s "$snap" ]; then
-    ok "the camera streams"
-    local rc=0
-    runuser -u nobody -- curl -s -m 3 -o /dev/null http://127.0.0.1:8080/snapshot || rc=$?
-    [ "$rc" = 7 ] || fail "other users here can open the camera: the firewall isn't on (journalctl -u homelab-firewall)"
-    ok "other users on this machine can't open it"
+  # shellcheck source=/dev/null
+  . "$ETC/homelab.conf"
+  if [ -e "$VAR/state/camera-on" ]; then
+    for _ in $(seq 20); do curl -sf -m 3 -o "$snap" http://127.0.0.1:8080/snapshot && break; sleep 1; done
+    if [ -s "$snap" ]; then ok "the camera is on, and streams"
+    else warn "the camera is on, but isn't streaming yet: $(journalctl -u homelab-camera -n 1 --no-pager -o cat)"; fi
+  elif [ -e "$CAMERA" ]; then
+    ok "the camera is plugged in, and off: turn it on from the page when you leave"
   else
-    warn "the camera isn't streaming yet: $(journalctl -u homelab-camera -n 1 --no-pager -o cat)"
+    warn "no camera at $CAMERA: plug it in"
   fi
-  [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/motion/off)" = 403 ] ||
+  runuser -u nobody -- curl -s -m 3 -o /dev/null http://127.0.0.1:8081/ || rc=$?
+  [ "$rc" = 7 ] || fail "other users here can reach the switch: the firewall isn't on (journalctl -u homelab-firewall)"
+  ok "other users on this machine can't open the camera, the switch or the page"
+  [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/camera/off)" = 403 ] ||
     fail "the page's switch doesn't answer: journalctl -u 'homelab-api*'"
   ok "the page's switch answers (and refuses requests not from the page)"
   systemctl start homelab-check.service || fail "the camera check failed: journalctl -u homelab-check"
@@ -274,7 +285,7 @@ checks() {
     if [ -s "$snap" ]; then
       alarm -p 3 -g house -u "$(page_url)" "Homelab is set up" "This is how alarms look; the photo is the camera now." "$snap"
     else
-      alarm -p 3 -g house "Homelab is set up" "This is how alarms look. The camera isn't streaming yet."
+      alarm -p 3 -g house -u "$(page_url)" "Homelab is set up" "This is how alarms look. Turn the camera on from the page to see it here."
     fi || fail "the test alarm didn't send (above)"
     ok "a test alarm went to your topic"
   fi
@@ -294,11 +305,10 @@ remove() {
     read -r -p "  Type yes to remove it all: " answer
     [ "$answer" = yes ] || fail "nothing removed"
   fi
-  systemctl stop "${SERVICES[@]}" homelab-update.timer homelab-check.service homelab-motion.service \
-    homelab-update.service 'homelab-api@*' 2>/dev/null || true
-  systemctl disable -q "${SERVICES[@]}" homelab-update.timer 2>/dev/null || true
-  rm -f "$UNITS"/homelab-{firewall.service,camera.service,motion.path,motion.service,check.timer,check.service} \
-    "$UNITS"/homelab-{api.socket,api@.service,update.service,update.timer}
+  local u
+  systemctl stop 'homelab-*' 2>/dev/null || true
+  for u in "$UNITS"/homelab-*; do [ -e "$u" ] && systemctl disable -q "${u##*/}" 2>/dev/null; done
+  rm -f "$UNITS"/homelab-*
   systemctl daemon-reload
   if [ -d "$OPT/www" ]; then tailscale serve --https=8443 off >/dev/null 2>&1 || true; fi
   local ours=''
@@ -343,7 +353,6 @@ case $mode in
     checks
     updates
     done_with
-    step "Done. Open the page and turn motion alarms on to try them: wave, and a photo arrives.
-Unplug the camera: you hear within 3 minutes."
+    step "Done. When you leave, open the page and turn the camera on: wave, and a photo arrives."
     ;;
 esac

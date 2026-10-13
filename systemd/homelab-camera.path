@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab: start the camera when it's turned on
+
+[Path]
+PathExists=/var/lib/homelab/state/camera-on
+Unit=homelab-camera.service
+
+[Install]
+WantedBy=paths.target

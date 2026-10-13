@@ -130,11 +130,11 @@ build() {
     git init -q "$1/src" && cd "$1/src"
     git fetch -q --depth 1 "$2" "$3" && git checkout -q FETCH_HEAD
     [ "$(git rev-parse HEAD)" = "$3" ]
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     cmake --build build -j "$(nproc)"' _ "$tmp" "$MJPG_REPO" "$MJPG_COMMIT" > "$tmp/build.log" 2>&1 || {
     tail -n 20 "$tmp/build.log" >&2
     rm -rf "$tmp"
-    fail "the build failed (above): check the packages and the internet, then run this again"
+    fail "the build failed: the end of its log is above"
   }
   install -d -m 755 "$OPT/mjpg/plugins"
   install -m 755 "$tmp/src/build/mjpg_streamer" "$OPT/mjpg/"

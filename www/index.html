@@ -209,6 +209,7 @@
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || `the switch answered ${r.status}`);
       showMotion(body);
+      if (smooth) timer = setTimeout(next, 4000); // the camera restarted: join its new stream
     } catch (e) {
       showMotion(motion, `Didn't switch: ${e.message}. Try again.`);
     }

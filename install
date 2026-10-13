@@ -255,7 +255,10 @@ checks() {
   rm -rf "$tmp"
   local url
   url=$(page_url)
-  if [ -n "$url" ] && curl -sf -m 10 -o /dev/null "$url/"; then ok "the page answers: $url"; fi
+  if [ -n "$url" ]; then
+    if curl -sf -m 10 -o /dev/null "$url/"; then ok "the page answers: $url"
+    else warn "the page didn't answer from here; open it on your phone: $url (tailscale serve status)"; fi
+  fi
 }
 
 remove() {

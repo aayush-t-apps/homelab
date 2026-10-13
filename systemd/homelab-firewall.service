@@ -1,6 +1,10 @@
 [Unit]
 Description=Homelab: only its own user and Tailscale may open the camera, the switch and the page here
-Before=homelab-camera.service homelab-api.socket
+# Up early, before any socket: the page's switch (a socket) waits for it.
+DefaultDependencies=no
+After=local-fs.target
+Before=sockets.target homelab-camera.service homelab-api.socket shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot

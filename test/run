@@ -189,6 +189,15 @@ expect "with the right length" has "$answer" "Content-Length: ${#body}"
 expect "and the camera looks for motion" is "$([ -e "$state/motion-on" ] && echo yes)" yes
 expect "off works too" is "$(ask "POST /api/motion/off HTTP/1.1" "X-Homelab: 1" | code) $([ -e "$state/motion-on" ] && echo yes || echo no)" "200 no"
 
+# The services start in an order systemd can keep at boot (a socket can't wait for an ordinary service).
+if command -v systemd-analyze >/dev/null; then
+  mkdir "$t/units"
+  cp systemd/* "$t/units/"
+  printf '[Unit]\nWants=basic.target homelab-firewall.service homelab-camera.service homelab-api.socket homelab-check.timer homelab-motion.path\nAfter=basic.target\n' > "$t/units/boot.target"
+  order=$(cd "$t/units" || exit; SYSTEMD_UNIT_PATH=$t/units: systemd-analyze verify --man=no boot.target 2>&1 | grep -i 'ordering cycle' || true)
+  expect "the services start in an order systemd can keep at boot" is "$order" ""
+fi
+
 echo
 echo "$passed passed, $failed failed"
 [ "$failed" = 0 ]

@@ -34,14 +34,14 @@
   .picture { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; }
   .picture:focus-visible { outline: 3px solid var(--brass); outline-offset: -3px; border-radius: 18px; }
   .picture img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  .live {
+  .badge {
     position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 7px;
     padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 14px; font-weight: 600;
     color: #fff; background: rgb(0 0 0 / 0.45);
   }
-  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4f; }
+  .badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4f; }
   @media (prefers-reduced-motion: no-preference) {
-    .live::before { animation: beat 2s ease-in-out infinite; }
+    .badge::before { animation: beat 2s ease-in-out infinite; }
     @keyframes beat { 50% { opacity: 0.35; } }
   }
   .quiet {
@@ -50,8 +50,8 @@
   }
   .quiet strong { font-size: 20px; color: var(--ink); }
   .quiet.alert strong { color: var(--alert); }
-  .camera {
-    margin-top: 14px; padding: 14px 14px 14px 18px; border-radius: 16px; background: var(--panel);
+  .view + .camera { margin-top: 14px; }
+  .camera { padding: 14px 14px 14px 18px; border-radius: 16px; background: var(--panel);
     display: flex; align-items: center; gap: 12px;
   }
   .dot { flex: none; align-self: flex-start; margin-top: 8px; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
@@ -86,11 +86,11 @@
     <span class="checked" id="checked"></span>
   </header>
 
-  <div class="view">
+  <div class="view" id="view">
     <button class="picture" id="picture" type="button" aria-label="Watch smoothly (uses more data)" hidden>
       <img id="stream" alt="The camera, live">
     </button>
-    <span class="live" id="live" hidden>Live</span>
+    <span class="badge" id="live" hidden>Live</span>
     <div class="quiet" id="quiet">
       <strong id="quiet-title">Checking the camera…</strong>
       <span id="quiet-note"></span>
@@ -171,6 +171,7 @@
       if (!watching) seen = false;
       next();
     }
+    $("view").hidden = health === "off"; // off: nothing to show
     $("picture").hidden = $("live").hidden = health !== "live";
     $("quiet").hidden = health === "live";
     $("quiet").className = health === "offline" ? "quiet alert" : "quiet";
@@ -179,13 +180,15 @@
     const text = {
       live: [`Camera on${at}.`, "Each movement sends a photo to your phone."],
       starting: ["Camera on.", "Starting…"],
-      offline: [`Camera offline${at}.`, `${status && status.note ? status.note[0].toUpperCase() + status.note.slice(1) + ". " : ""}It restarts by itself; if it's unplugged, plug it back in.`],
-      off: [`Camera off${at}.`, "Turn it on when you leave."],
+      offline: [`Camera offline${at}.`, "You heard about it once; you'll hear again when it's back."],
+      off: [`Camera off${at}.`, "It isn't in use: nothing is seen or saved. Turn it on when you leave."],
     }[health];
     $("state").textContent = text[0];
     $("note").textContent = problem || text[1];
     $("quiet-title").textContent = { starting: "Starting the camera…", offline: "Camera offline", off: "Camera off" }[health] || "";
-    $("quiet-note").textContent = health === "off" ? "It isn't in use. Nothing is seen or saved." : health === "offline" ? text[1] : "";
+    $("quiet-note").textContent = health === "offline"
+      ? `${status && status.note ? status.note[0].toUpperCase() + status.note.slice(1) + ". " : ""}It restarts by itself; if it's unplugged, plug it back in.`
+      : "";
     const b = $("switch");
     b.hidden = false; b.disabled = false;
     b.textContent = on ? "Turn off" : "Turn on";

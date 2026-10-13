@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# homelab-check, every minute: is the camera's picture live? You hear once when it stops and once
-# when it's back. It also writes the page's status and clears out old photos.
+# homelab-check, every minute: while the camera is on, is its picture live? You hear once when it
+# stops and once when it's back. It also writes the page's status and clears out old photos.
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${HOMELAB_CONF:-/etc/homelab/homelab.conf}"
 var=${HOMELAB_VAR:-/var/lib/homelab}
 alarm=${ALARM_BIN:-alarm}
-camera=${CAMERA_URL:-http://127.0.0.1:8080}
+url=${CAMERA_URL:-http://127.0.0.1:8080}
 state=$var/state motion=$var/data/motion
 now=$(date -Iseconds)
 
@@ -20,49 +20,56 @@ send() { # priority tags title message
   fi
 }
 
-[ -f "$state/camera" ] || { echo on > "$state/camera"; echo "$now" > "$state/since"; }
-
 # Live means a snapshot that changes: a camera that drops out leaves the last picture behind
 # (mjpg-streamer keeps running), so the same picture three minutes in a row counts as stopped.
 # One minute with no answer may be a restart (a switch, a replug): two in a row count. The camera
 # program answers one snapshot per frame, to whoever asks first (the page asks every second), so a
-# snapshot that comes back empty is asked again.
-snap=$(mktemp)
+# snapshot that comes back empty is asked again. Sets camera to live or offline.
+snap=''
 trap 'rm -f "$snap"' EXIT
-live=yes note=''
-if curl -sf -m 10 --retry 2 --retry-delay 1 --retry-all-errors -o "$snap" "$camera/snapshot" && [ -s "$snap" ]; then
-  rm -f "$state/miss"
-  hash=$(sha256sum < "$snap" | cut -d' ' -f1)
-  same=0
-  if [ "$hash" = "$(cat "$state/hash" 2>/dev/null)" ]; then
-    same=$(( $(cat "$state/same" 2>/dev/null || echo 0) + 1 ))
+watch() {
+  local live=yes note='' hash same miss was
+  snap=$(mktemp)
+  if curl -sf -m 10 --retry 2 --retry-delay 1 --retry-all-errors -o "$snap" "$url/snapshot" && [ -s "$snap" ]; then
+    rm -f "$state/miss"
+    hash=$(sha256sum < "$snap" | cut -d' ' -f1)
+    same=0
+    if [ "$hash" = "$(cat "$state/hash" 2>/dev/null)" ]; then
+      same=$(( $(cat "$state/same" 2>/dev/null || echo 0) + 1 ))
+    fi
+    echo "$hash" > "$state/hash"
+    echo "$same" > "$state/same"
+    [ "$same" -lt 2 ] || { live=no note="the picture stopped changing"; }
+  else
+    miss=$(( $(cat "$state/miss" 2>/dev/null || echo 0) + 1 ))
+    echo "$miss" > "$state/miss"
+    if [ "$miss" -ge 2 ]; then live=no note="the camera isn't answering"; else live=unsure; fi
   fi
-  echo "$hash" > "$state/hash"
-  echo "$same" > "$state/same"
-  [ "$same" -lt 2 ] || { live=no note="the picture stopped changing"; }
-else
-  miss=$(( $(cat "$state/miss" 2>/dev/null || echo 0) + 1 ))
-  echo "$miss" > "$state/miss"
-  if [ "$miss" -ge 2 ]; then live=no note="the camera isn't answering"; else live=unsure; fi
-fi
 
-was=$(cat "$state/camera")
-case $live in
-  no)
-    # Start it again; if it's unplugged, it waits for the camera.
-    pkill -x -u "${HOMELAB_USER:-homelab}" "${HOMELAB_PROC:-mjpg_streamer}" || true
-    if [ "$was" = on ]; then
-      echo off > "$state/camera"; echo "$now" > "$state/since"; echo "$note" > "$state/note"
-      send 4 warning "Camera offline" "Since $(date +%H:%M): $note. It restarts by itself; if it's unplugged, plug it back in."
-    fi
-    ;;
-  yes)
-    if [ "$was" = off ]; then
-      echo on > "$state/camera"; echo "$now" > "$state/since"; rm -f "$state/note"
-      send 2 white_check_mark "Camera back" "Working again since $(date +%H:%M)."
-    fi
-    ;;
-esac
+  [ -f "$state/camera" ] || { echo on > "$state/camera"; echo "$now" > "$state/since"; }
+  was=$(cat "$state/camera")
+  case $live in
+    no)
+      # Start it again; if it's unplugged, it waits for the camera.
+      pkill -x -u "${HOMELAB_USER:-homelab}" "${HOMELAB_PROC:-mjpg_streamer}" || true
+      if [ "$was" = on ]; then
+        echo off > "$state/camera"; echo "$now" > "$state/since"; echo "$note" > "$state/note"
+        send 4 warning "Camera offline" "Since $(date +%H:%M): $note. It restarts by itself; if it's unplugged, plug it back in."
+      fi
+      ;;
+    yes)
+      if [ "$was" = off ]; then
+        echo on > "$state/camera"; echo "$now" > "$state/since"; rm -f "$state/note"
+        send 2 white_check_mark "Camera back" "Working again since $(date +%H:%M)."
+      fi
+      ;;
+  esac
+  camera=live
+  [ "$(cat "$state/camera")" = on ] || camera=offline
+}
+
+camera=off # you turned it off: nothing to check
+[ ! -e "$state/camera-on" ] || watch
 
 # Clear out the motion plugin's grey debug frames at once, and photos after KEEP_DAYS.
 find "$motion" -maxdepth 1 -name 'debug_*.jpg' -mmin +1 -delete
@@ -73,8 +80,8 @@ photos=$(find "$motion" -maxdepth 1 -name '*_motion_*.jpg' ! -name 'debug_*' -pr
   | sort -rn | sed -n '1,24p' | cut -d' ' -f2-)
 today=$(find "$motion" -maxdepth 1 -name "$(date +%Y%m%d)_*_motion_*.jpg" ! -name 'debug_*' | wc -l)
 jq -n \
-  --arg camera "$(cat "$state/camera")" \
-  --arg since "$(cat "$state/since")" \
+  --arg camera "$camera" \
+  --arg since "$(cat "$state/since" 2>/dev/null || echo "$now")" \
   --arg note "$(cat "$state/note" 2>/dev/null || true)" \
   --arg alarm_error "$(cat "$state/alarm-error" 2>/dev/null || true)" \
   --argjson today "$today" \

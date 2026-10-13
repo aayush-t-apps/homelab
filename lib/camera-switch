@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# The camera on or off. On, for when you're away: the live view, and a photo to your phone for each
+# movement. Off, for when you're home: the camera isn't used at all, and nothing runs for it.
+#   camera-switch on|off
+set -euo pipefail
+var=${HOMELAB_VAR:-/var/lib/homelab}
+user=${HOMELAB_USER:-homelab}
+# Its state belongs to the homelab user: run as root, it switches to that user.
+if [ "$(id -u)" = 0 ] && [ "$user" = homelab ]; then exec runuser -u homelab -- "$0" "$@"; fi
+
+case ${1:-} in
+  on) touch "$var/state/camera-on" ;; # homelab-camera.path starts it
+  off) rm -f "$var/state/camera-on" ;;
+  *) echo "usage: camera-switch on|off" >&2; exit 2 ;;
+esac
+# The minute check starts afresh: no "Camera back" for a camera you turned on.
+echo on > "$var/state/camera"
+date -Iseconds > "$var/state/since"
+rm -f "$var/state/miss" "$var/state/same" "$var/state/hash" "$var/state/note"
+jq -n --arg camera "$1" --arg since "$(cat "$var/state/since")" '{camera: $camera, since: $since}' > "$var/data/camera.json.new"
+mv "$var/data/camera.json.new" "$var/data/camera.json"
+# Off: stop it now; while off, systemd won't start it again (ConditionPathExists).
+[ "$1" = on ] || pkill -x -u "$user" "${HOMELAB_PROC:-mjpg_streamer}" || true

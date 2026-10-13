@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests alarm, motion-send, check, motion-switch and api against a stand-in for ntfy and the camera (test/fake_server.py).
+# Tests alarm, motion-send, check, camera-switch, api and update against a stand-in for ntfy and the camera (test/fake_server.py).
 # Needs bash, curl 7.87+, jq and python3. Run: test/run
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,7 +21,7 @@ for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$port/snapshot" &&
 me=$(id -un)
 export ALARM_CONF=$t/alarm.conf HOMELAB_CONF=$t/homelab.conf HOMELAB_VAR=$t/var ALARM_BIN=$root/bin/alarm \
   CAMERA_URL=http://127.0.0.1:$port HOMELAB_PROC=fake_mjpg HOMELAB_USER=$me SETTLE=0 \
-  MOTION_SWITCH=$root/lib/motion-switch
+  CAMERA_SWITCH=$root/lib/camera-switch
 echo "ALARM_URL=http://127.0.0.1:$port/secret_topic_123" > "$ALARM_CONF"
 printf 'KEEP_DAYS=7\nPAGE=https://home.example.ts.net:8443\n' > "$HOMELAB_CONF"
 mkdir -p "$HOMELAB_VAR/state" "$HOMELAB_VAR/data/motion"
@@ -119,14 +119,15 @@ running() { sleep 0.2; kill -0 "$fake" 2>/dev/null && echo running || echo stopp
 camera_program
 n=$(sent)
 status_file=$motion/../status.json
+touch "$state/camera-on"
 echo frame-a > "$t/snapshot"
 lib/check
-expect "a working camera is on" is "$(jq -r .camera "$motion/../status.json")" on
+expect "a working camera is live" is "$(jq -r .camera "$motion/../status.json")" live
 lib/check
-expect "the same picture twice is still on" is "$(jq -r .camera "$motion/../status.json")" on
+expect "the same picture twice is still live" is "$(jq -r .camera "$motion/../status.json")" live
 expect "and makes no alarm" is "$(sent)" "$n"
 lib/check
-expect "three times in a row is offline" is "$(jq -r .camera "$motion/../status.json")" off
+expect "three times in a row is offline" is "$(jq -r .camera "$motion/../status.json")" offline
 expect "with one alarm saying why" is "$(sent) $(last .query.title)" "$((n + 1)) Camera offline"
 expect "it says the picture stopped" has "$(last .body)" "stopped changing"
 expect "and the camera program is started again" is "$(running)" stopped
@@ -134,15 +135,15 @@ lib/check
 expect "still frozen: no second alarm" is "$(sent)" "$((n + 1))"
 echo frame-b > "$t/snapshot"
 lib/check
-expect "a new picture is back on" is "$(jq -r .camera "$motion/../status.json")" on
+expect "a new picture is live again" is "$(jq -r .camera "$motion/../status.json")" live
 expect "with a quiet alarm" is "$(last '.query.title + " " + .query.priority')" "Camera back 2"
 n=$(sent)
 rm "$t/snapshot"
 lib/check 2>/dev/null
-expect "one minute with no answer may be a restart: no alarm" is "$(sent) $(jq -r .camera "$status_file")" "$n on"
+expect "one minute with no answer may be a restart: no alarm" is "$(sent) $(jq -r .camera "$status_file")" "$n live"
 echo frame-c > "$t/snapshot"
 lib/check
-expect "and an answer the next minute changes nothing" is "$(sent) $(jq -r .camera "$status_file")" "$n on"
+expect "and an answer the next minute changes nothing" is "$(sent) $(jq -r .camera "$status_file")" "$n live"
 rm "$t/snapshot"
 lib/check 2>/dev/null
 lib/check 2>/dev/null
@@ -161,33 +162,41 @@ expect "the page lists the newest photo first" is "$(jq -r '.photos[0]' "$status
 expect "and counts today's" is "$(jq -r .motion_today "$status")" 1
 expect "and says why it's offline" is "$(jq -r .note "$status")" "the camera isn't answering"
 
-# motion-switch
+# camera-switch
 camera_program
-lib/motion-switch on
-expect "on: the camera looks for motion" is "$([ -e "$state/motion-on" ] && echo yes)" yes
-expect "and the page sees it" is "$(jq -r .motion "$HOMELAB_VAR/data/motion.json")" on
-expect "and the camera restarts to take it" is "$(running)" stopped
+lib/camera-switch off
+expect "off: the camera isn't to run" is "$([ -e "$state/camera-on" ] && echo yes || echo no) $(jq -r .camera "$HOMELAB_VAR/data/camera.json")" "no off"
+expect "and it stops now" is "$(running)" stopped
+n=$(sent) asked=$(wc -l < "$t/snapshots")
+lib/check
+expect "off: the check doesn't look, or alarm" is "$(sent) $(wc -l < "$t/snapshots")" "$n $asked"
+expect "and the page says it's off" is "$(jq -r .camera "$status_file")" off
 camera_program
-lib/motion-switch off
-expect "off: it doesn't" is "$([ -e "$state/motion-on" ] && echo yes || echo no) $(jq -r .motion "$HOMELAB_VAR/data/motion.json")" "no off"
-expect "and the camera restarts again" is "$(running)" stopped
-lib/motion-switch maybe 2>/dev/null && code=0 || code=$?
+lib/camera-switch on
+expect "on: the camera is to run" is "$([ -e "$state/camera-on" ] && echo yes) $(jq -r .camera "$HOMELAB_VAR/data/camera.json")" "yes on"
+expect "and nothing running is stopped" is "$(running)" running
+echo frame-d > "$t/snapshot"
+lib/check
+expect "a camera turned on is live, with no 'Camera back'" is "$(sent) $(jq -r .camera "$status_file")" "$n live"
+expect "since you turned it on" is "$(jq -r .since "$status_file")" "$(jq -r .since "$HOMELAB_VAR/data/camera.json")"
+lib/camera-switch maybe 2>/dev/null && code=0 || code=$?
 expect "anything but on or off is refused" is "$code" 2
 
 # api: one HTTP request on stdin, the answer on stdout
 ask() { printf '%s\r\n' "$@" "" | lib/api; }
 code() { head -n 1 | cut -d' ' -f2; }
-expect "a GET is refused" is "$(ask "GET /api/motion/on HTTP/1.1" "X-Homelab: 1" | code)" 405
-expect "a POST without the page's header is refused" is "$(ask "POST /api/motion/on HTTP/1.1" "Host: x" | code)" 403
-expect "and changes nothing" is "$(jq -r .motion "$HOMELAB_VAR/data/motion.json")" off
+lib/camera-switch off
+expect "a GET is refused" is "$(ask "GET /api/camera/on HTTP/1.1" "X-Homelab: 1" | code)" 405
+expect "a POST without the page's header is refused" is "$(ask "POST /api/camera/on HTTP/1.1" "Host: x" | code)" 403
+expect "and changes nothing" is "$(jq -r .camera "$HOMELAB_VAR/data/camera.json")" off
 expect "an unknown switch is refused" is "$(ask "POST /api/lights/on HTTP/1.1" "X-Homelab: 1" | code)" 404
-answer=$(ask "POST /api/motion/on HTTP/1.1" "x-homelab: 1" "Content-Length: 0")
+answer=$(ask "POST /api/camera/on HTTP/1.1" "x-homelab: 1" "Content-Length: 0")
 expect "the page's request switches it on" is "$(printf '%s' "$answer" | code)" 200
 body=${answer#*$'\r\n\r\n'}
-expect "and answers with the new state" is "$(printf '%s' "$body" | jq -r .motion)" on
+expect "and answers with the new state" is "$(printf '%s' "$body" | jq -r .camera)" on
 expect "with the right length" has "$answer" "Content-Length: ${#body}"
-expect "and the camera looks for motion" is "$([ -e "$state/motion-on" ] && echo yes)" yes
-expect "off works too" is "$(ask "POST /api/motion/off HTTP/1.1" "X-Homelab: 1" | code) $([ -e "$state/motion-on" ] && echo yes || echo no)" "200 no"
+expect "and the camera is to run" is "$([ -e "$state/camera-on" ] && echo yes)" yes
+expect "off works too" is "$(ask "POST /api/camera/off HTTP/1.1" "X-Homelab: 1" | code) $([ -e "$state/camera-on" ] && echo yes || echo no)" "200 no"
 
 # update: a throwaway origin, a clone of it, and a stand-in install
 g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
@@ -246,7 +255,7 @@ unset HOMELAB_SRC HOMELAB_INSTALLED HOMELAB_INSTALL
 if command -v systemd-analyze >/dev/null; then
   mkdir "$t/units"
   cp systemd/* "$t/units/"
-  printf '[Unit]\nWants=basic.target homelab-firewall.service homelab-camera.service homelab-api.socket homelab-check.timer homelab-motion.path homelab-update.timer\nAfter=basic.target\n' > "$t/units/boot.target"
+  printf '[Unit]\nWants=basic.target homelab-firewall.service homelab-camera.service homelab-camera.path homelab-api.socket homelab-check.timer homelab-motion.path homelab-update.timer\nAfter=basic.target\n' > "$t/units/boot.target"
   order=$(cd "$t/units" || exit; SYSTEMD_UNIT_PATH=$t/units: systemd-analyze verify --man=no boot.target 2>&1 | grep -i 'ordering cycle' || true)
   expect "the services start in an order systemd can keep at boot" is "$order" ""
 fi

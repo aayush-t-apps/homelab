@@ -1,6 +1,7 @@
 """A stand-in for ntfy and the camera, for test/run.
 
-  GET /snapshot   the bytes of <dir>/snapshot, or 503 when it's missing (a camera that doesn't answer)
+  GET /snapshot   the bytes of <dir>/snapshot, or 503 when it's missing (a camera that doesn't answer);
+                  each ask is a line in <dir>/snapshots
   anything else   an alarm: recorded as one JSON line in <dir>/requests.jsonl; answers 200, or the
                   status in <dir>/status with an ntfy-style error when that file exists
 """
@@ -45,6 +46,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/snapshot"):
+            with open(folder / "snapshots", "a") as f:
+                f.write("asked\n")
             snap = folder / "snapshot"
             if snap.exists():
                 self.answer(200, snap.read_bytes(), "image/jpeg")

@@ -1,6 +1,7 @@
 # Homelab: agent guide
 
-The home camera, its motion alarms, its page, and the `alarm` command (README.md). Your work ends
+The home camera (on while you're away: live view and motion photos), its page, and the `alarm`
+command (README.md). Your work ends
 at a PR; the owner's merge is the approval, and each machine installs `main` by itself the next
 day (`lib/update`). So `main` must always install cleanly: CI runs the checks below on every PR.
 

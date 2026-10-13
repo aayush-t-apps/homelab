@@ -31,44 +31,44 @@
     position: relative; aspect-ratio: 16 / 9; border-radius: 18px; overflow: hidden;
     background: var(--panel);
   }
-  .view img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .picture { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; }
   .picture:focus-visible { outline: 3px solid var(--brass); outline-offset: -3px; border-radius: 18px; }
-  .live {
+  .picture img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .badge {
     position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 7px;
     padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 14px; font-weight: 600;
     color: #fff; background: rgb(0 0 0 / 0.45);
   }
-  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4f; }
+  .badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4f; }
   @media (prefers-reduced-motion: no-preference) {
-    .live::before { animation: beat 2s ease-in-out infinite; }
+    .badge::before { animation: beat 2s ease-in-out infinite; }
     @keyframes beat { 50% { opacity: 0.35; } }
   }
-  .offline {
+  .quiet {
     position: absolute; inset: 0; display: grid; align-content: center; gap: 6px;
-    padding: 24px; text-align: center;
+    padding: 24px; text-align: center; color: var(--muted);
   }
-  .offline strong { font-size: 20px; color: var(--alert); }
-  .offline span { color: var(--muted); }
-  .state { margin: 14px 2px 0; display: flex; gap: 10px; align-items: baseline; }
-  .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); transform: translateY(-1px); }
-  .dot.off { background: var(--alert); }
-  .state p { margin: 0; }
-  .state small { display: block; color: var(--muted); font-size: 15px; }
-  .error { margin: 12px 2px 0; color: var(--alert); font-size: 15px; }
-  .switch {
-    margin-top: 18px; padding: 14px 14px 14px 18px; border-radius: 16px; background: var(--panel);
-    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  .quiet strong { font-size: 20px; color: var(--ink); }
+  .quiet.alert strong { color: var(--alert); }
+  .view + .camera { margin-top: 14px; }
+  .camera { padding: 14px 14px 14px 18px; border-radius: 16px; background: var(--panel);
+    display: flex; align-items: center; gap: 12px;
   }
-  .switch p { margin: 0; }
-  .switch small { display: block; color: var(--muted); font-size: 15px; }
-  .switch button {
+  .dot { flex: none; align-self: flex-start; margin-top: 8px; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--ok); }
+  .dot.offline { background: var(--alert); }
+  .camera p { margin: 0; flex: 1; }
+  .camera small { display: block; color: var(--muted); font-size: 15px; }
+  .camera button {
     flex: none; font: inherit; font-weight: 650; border: 0; border-radius: 999px; padding: 10px 18px;
     background: var(--ink); color: var(--wall); cursor: pointer;
   }
-  .switch button:disabled { opacity: 0.55; cursor: progress; }
-  .switch button:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
-  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 12px; }
+  .camera button:disabled { opacity: 0.55; cursor: progress; }
+  .camera button:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
+  .error { margin: 12px 2px 0; color: var(--alert); font-size: 15px; }
+  .photos-head { display: flex; align-items: baseline; justify-content: space-between; margin: 36px 0 12px; }
+  h2 { font-size: 20px; font-weight: 700; margin: 0; }
+  .photos-head span { color: var(--muted); font-size: 15px; }
   .photos { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 10px; }
   @media (min-width: 560px) { .photos { grid-template-columns: repeat(3, 1fr); } }
   .photos a { display: block; color: inherit; text-decoration: none; border-radius: 12px; }
@@ -86,31 +86,30 @@
     <span class="checked" id="checked"></span>
   </header>
 
-  <div class="view">
-    <button class="picture" id="picture" type="button" aria-label="Watch smoothly (uses more data)">
+  <div class="view" id="view">
+    <button class="picture" id="picture" type="button" aria-label="Watch smoothly (uses more data)" hidden>
       <img id="stream" alt="The camera, live">
     </button>
-    <span class="live" id="live">Live</span>
-    <div class="offline" id="offline" hidden>
-      <strong id="offline-title">Camera offline</strong>
-      <span id="offline-note"></span>
+    <span class="badge" id="live" hidden>Live</span>
+    <div class="quiet" id="quiet">
+      <strong id="quiet-title">Checking the camera…</strong>
+      <span id="quiet-note"></span>
     </div>
   </div>
 
-  <div class="state">
+  <div class="camera">
     <span class="dot" id="dot"></span>
-    <p><span id="summary">Checking the camera…</span><small id="motion"></small></p>
+    <p><span id="state">Checking the camera…</span><small id="note"></small></p>
+    <button type="button" id="switch" hidden></button>
   </div>
   <p class="error" id="error" hidden></p>
 
-  <div class="switch">
-    <p><span id="motion-state">Motion alarms…</span><small id="motion-note"></small></p>
-    <button type="button" id="motion-button" hidden></button>
+  <div class="photos-head">
+    <h2>Motion photos</h2>
+    <span id="today"></span>
   </div>
-
-  <h2>Motion photos</h2>
   <ul class="photos" id="photos"></ul>
-  <p class="empty" id="empty" hidden>No motion photos yet. When something moves, its photo shows here and on your phone.</p>
+  <p class="empty" id="empty" hidden>No motion photos yet. While the camera is on, each movement's photo shows here and on your phone.</p>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
@@ -128,21 +127,27 @@
     return `${day}, ${clock(d)}`;
   }
 
+  // What we know: the switch (camera.json, at once) and the minute check (status.json).
+  let switched = null, status = null, seen = false, problem = "";
+
   // The live view: a new picture every second, light on mobile data; tap it for the smooth
-  // stream. Paused while the page is hidden, and tried again if it drops.
-  let cameraOn = true, smooth = false, timer = 0, misses = 0;
+  // stream. Only while the camera is on and the page is showing; tried again if it drops.
+  let watching = false, smooth = false, timer = 0, misses = 0;
   const view = $("stream");
   function next() {
     clearTimeout(timer);
-    if (!cameraOn || document.hidden) { view.removeAttribute("src"); return; }
+    if (!watching || document.hidden) { view.removeAttribute("src"); return; }
     if (smooth) { view.src = `/stream?${Date.now()}`; return; }
     const img = new Image();
-    img.onload = () => { misses = 0; view.src = img.src; timer = setTimeout(next, 1000); };
+    img.onload = () => {
+      misses = 0; view.src = img.src; timer = setTimeout(next, 1000);
+      if (!seen) { seen = true; render(); }
+    };
     // The camera gives each picture to whoever asks first: ask again soon, slow down if it keeps failing.
     img.onerror = () => { timer = setTimeout(next, ++misses < 5 ? 300 : 5000); };
     img.src = `/snapshot?${Date.now()}`;
   }
-  view.addEventListener("error", () => { if (smooth && cameraOn) timer = setTimeout(next, 5000); });
+  view.addEventListener("error", () => { if (smooth && watching) timer = setTimeout(next, 5000); });
   $("picture").addEventListener("click", () => {
     smooth = !smooth;
     $("live").textContent = smooth ? "Live, smooth" : "Live";
@@ -151,35 +156,82 @@
   });
   document.addEventListener("visibilitychange", next);
 
-  async function refresh() {
-    let s;
+  function render() {
+    const on = switched ? switched.camera === "on" : status ? status.camera !== "off" : null;
+    if (on === null) return;
+    // The minute check counts only if it ran since the last switch.
+    const fresh = status && (!switched || new Date(status.updated) >= new Date(switched.since));
+    const health = !on ? "off" : seen ? "live" : fresh && status.camera === "offline" ? "offline"
+      : fresh && status.camera === "live" ? "live" : "starting";
+    const since = fresh && status.camera === health ? new Date(status.since) : switched ? new Date(switched.since) : null;
+    const at = since ? ` since ${when(since)}` : "";
+
+    if (watching !== (health === "live" || health === "starting")) {
+      watching = !watching;
+      if (!watching) seen = false;
+      next();
+    }
+    $("view").hidden = health === "off"; // off: nothing to show
+    $("picture").hidden = $("live").hidden = health !== "live";
+    $("quiet").hidden = health === "live";
+    $("quiet").className = health === "offline" ? "quiet alert" : "quiet";
+    $("dot").className = `dot ${health}`;
+
+    const text = {
+      live: [`Camera on${at}.`, "Each movement sends a photo to your phone."],
+      starting: ["Camera on.", "Starting…"],
+      offline: [`Camera offline${at}.`, "You heard about it once; you'll hear again when it's back."],
+      off: [`Camera off${at}.`, "It isn't in use: nothing is seen or saved. Turn it on when you leave."],
+    }[health];
+    $("state").textContent = text[0];
+    $("note").textContent = problem || text[1];
+    $("quiet-title").textContent = { starting: "Starting the camera…", offline: "Camera offline", off: "Camera off" }[health] || "";
+    $("quiet-note").textContent = health === "offline"
+      ? `${status && status.note ? status.note[0].toUpperCase() + status.note.slice(1) + ". " : ""}It restarts by itself; if it's unplugged, plug it back in.`
+      : "";
+    const b = $("switch");
+    b.hidden = false; b.disabled = false;
+    b.textContent = on ? "Turn off" : "Turn on";
+  }
+
+  $("switch").addEventListener("click", async () => {
+    const to = $("switch").textContent === "Turn on" ? "on" : "off", b = $("switch");
+    b.disabled = true; b.textContent = to === "on" ? "Turning on…" : "Turning off…";
     try {
-      const r = await fetch(`/data/status.json?${Date.now()}`, { cache: "no-store" });
-      if (!r.ok) throw new Error(r.status);
-      s = await r.json();
+      const r = await fetch(`/api/camera/${to}`, { method: "POST", headers: { "X-Homelab": "1" } });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `the switch answered ${r.status}`);
+      switched = body; problem = ""; seen = false;
+    } catch (e) {
+      problem = `Didn't switch: ${e.message}. Try again.`;
+    }
+    render();
+  });
+
+  async function refresh() {
+    try {
+      const [s, c] = await Promise.all([
+        fetch(`/data/status.json?${Date.now()}`, { cache: "no-store" }),
+        fetch(`/data/camera.json?${Date.now()}`, { cache: "no-store" }),
+      ]);
+      if (!s.ok) throw new Error(s.status);
+      status = await s.json();
+      if (c.ok) switched = await c.json();
     } catch {
-      $("summary").textContent = "Can't reach home. Check that Tailscale is on, then reload.";
-      $("dot").className = "dot off";
+      $("state").textContent = "Can't reach home.";
+      $("note").textContent = "Check that Tailscale is on, then reload.";
+      $("dot").className = "dot offline";
       return;
     }
-    const since = new Date(s.since);
-    const on = s.camera === "on";
-    if (on !== cameraOn) { cameraOn = on; next(); }
-    $("live").hidden = $("picture").hidden = !on;
-    $("offline").hidden = on;
-    $("dot").className = on ? "dot" : "dot off";
-    $("summary").textContent = on ? `Camera on since ${when(since)}.` : `Camera offline since ${when(since)}.`;
-    $("offline-note").textContent = `${s.note ? s.note[0].toUpperCase() + s.note.slice(1) + ". " : ""}It restarts by itself. If it's unplugged, plug it back in.`;
-    $("motion").textContent = s.motion_today === 0 ? "No motion today."
-      : `${s.motion_today} motion photo${s.motion_today === 1 ? "" : "s"} today.`;
-    $("checked").textContent = `Checked ${clock(new Date(s.updated))}`;
+    render();
+    $("checked").textContent = `Checked ${clock(new Date(status.updated))}`;
+    $("today").textContent = status.motion_today ? `${status.motion_today} today` : "";
 
-    const err = s.alarm_error && s.alarm_error.match(/^(\S+) (?:alarm: )?(.*)$/);
+    const err = status.alarm_error && status.alarm_error.match(/^(\S+) (?:alarm: )?(.*)$/s);
     $("error").hidden = !err;
     if (err) $("error").textContent = `The last alarm didn't reach your phone (${clock(new Date(err[1]))}): ${err[2]}. The next one tries again.`;
 
-    const list = $("photos");
-    list.replaceChildren(...s.photos.map((name) => {
+    $("photos").replaceChildren(...status.photos.map((name) => {
       const d = taken(name), url = `/data/motion/${encodeURIComponent(name)}`;
       const li = document.createElement("li"), a = document.createElement("a"), img = document.createElement("img"), t = document.createElement("time");
       a.href = url; img.src = url; img.loading = "lazy"; img.alt = d ? `Motion, ${when(d)}` : "Motion";
@@ -187,44 +239,11 @@
       a.append(img, t); li.append(a);
       return li;
     }));
-    $("empty").hidden = s.photos.length > 0;
+    $("empty").hidden = status.photos.length > 0;
   }
 
-  // Motion alarms: off while you're home, on when you leave. The camera restarts to take it.
-  let motion = null;
-  function showMotion(m, note = "") {
-    motion = m;
-    const on = m.motion === "on";
-    $("motion-state").textContent = on ? `Motion alarms on since ${when(new Date(m.since))}.` : "Motion alarms off.";
-    $("motion-note").textContent = note || (on ? "Each movement sends a photo to your phone." : "Turn them on when you leave.");
-    const b = $("motion-button");
-    b.hidden = false; b.disabled = false;
-    b.textContent = on ? "Turn off" : "Turn on";
-  }
-  $("motion-button").addEventListener("click", async () => {
-    const to = motion && motion.motion === "on" ? "off" : "on", b = $("motion-button");
-    b.disabled = true; b.textContent = to === "on" ? "Turning on…" : "Turning off…";
-    try {
-      const r = await fetch(`/api/motion/${to}`, { method: "POST", headers: { "X-Homelab": "1" } });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error || `the switch answered ${r.status}`);
-      showMotion(body);
-      if (smooth) timer = setTimeout(next, 4000); // the camera restarted: join its new stream
-    } catch (e) {
-      showMotion(motion, `Didn't switch: ${e.message}. Try again.`);
-    }
-  });
-  async function refreshMotion() {
-    try {
-      const r = await fetch(`/data/motion.json?${Date.now()}`, { cache: "no-store" });
-      if (r.ok) showMotion(await r.json());
-    } catch { /* the status line already says home can't be reached */ }
-  }
-
-  next();
   refresh();
-  refreshMotion();
-  setInterval(() => { refresh(); refreshMotion(); }, 30000);
+  setInterval(refresh, 30000);
 </script>
 </body>
 </html>

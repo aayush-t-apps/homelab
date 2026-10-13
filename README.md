@@ -1,27 +1,29 @@
 # Homelab
 
-Your home, watched from one small Linux machine (today: homepi). A USB camera you can see from
-your phone, motion alarms you switch on when you leave, and one `alarm` command anything else can
-use to tell you something. It costs nothing, and only the camera program runs all the time.
+Your home, watched from one small Linux machine (today: homepi). A USB camera you turn on when you
+leave: you see it from your phone, and each movement sends you a photo. And one `alarm` command
+anything else can use to tell you something. It costs nothing, and while the camera is off, nothing
+runs for it.
 
 ## How it works
 
 ```
-                 on homepi                                        on your phone
+                 on homepi, while the camera is on                on your phone
  camera ──► camera program ──► motion photo ──► alarm ──► ntfy.sh ──► ntfy app: the alarm
-   (USB)    (stream; motion         (only while            (topic)
-            only while on)          alarms are on)
+   (USB)    (live stream and                               (topic)
+             motion detection)
 
- page, live view, switch ◄── Tailscale (your devices only) ◄────────── browser: the page
+ page: live view, switch ◄── Tailscale (your devices only) ◄────────── browser: the page
 ```
 
-- **Camera:** [mjpg-streamer](https://github.com/350d/mjpg-streamer) at the version tested here
-  streams the camera. While motion alarms are on, its motion plugin saves a photo of each movement,
-  and that photo goes to your phone at once.
-- **Motion alarms are off to start.** Turn them on from the page when you leave and off when you're
-  back. Off, nothing looks for motion: no photos, no alarms, less work for the machine.
-- **Camera health:** a check every minute, whether alarms are on or off. If the picture stops
-  (unplugged, or stuck), you hear once, it restarts by itself, and you hear again when it's back.
+- **The camera is off to start,** and whenever you're home: it isn't used at all, nothing is seen
+  or saved, and nothing runs for it. Turn it on from the page when you leave, off when you're back.
+  The machine remembers it, through restarts and updates.
+- **On,** [mjpg-streamer](https://github.com/350d/mjpg-streamer) (at the version tested here)
+  streams the camera, and its motion plugin saves a photo of each movement. That photo goes to your
+  phone at once.
+- **Camera health,** while it's on: a check every minute. If the picture stops (unplugged, or
+  stuck), you hear once, it restarts by itself, and you hear again when it's back.
 - **The page:** the live view, the switch, the camera's state and the last week's motion photos.
   Tapping an alarm opens it.
 
@@ -162,7 +164,7 @@ Homelab shares homepi with a Shipify box. They don't touch:
 
 | You see | Do |
 |---|---|
-| No alarms at all | Subscribed to the topic in ntfy? Muted? Motion alarms on? Running the install again at the machine sends a test alarm |
+| No alarms at all | Subscribed to the topic in ntfy? Muted? Camera on? Running the install again at the machine sends a test alarm |
 | "Camera offline" and it stays | Plug the camera in, or try another USB port. `journalctl -u homelab-camera -n 20` |
 | Too many motion alarms | Raise `--motion` or `--cooldown`, or use `--zones` to skip a busy part |
 | Missed motion | Lower `--motion` or `--sequence` |
@@ -185,12 +187,12 @@ Logs: `journalctl -u 'homelab-*'`. Status: `systemctl list-units 'homelab-*'`.
 |---|---|
 | `install` | the one command: set up, `alarm`, `remove` |
 | `bin/alarm` | the alarm command |
-| `lib/camera-run` | starts the camera program (motion only while alarms are on) |
+| `lib/camera-run` | starts the camera program (only while the camera is on) |
 | `lib/motion-send` | sends a new motion photo as an alarm |
 | `lib/check` | the minute check: camera health, the page's status, old photos |
-| `lib/motion-switch`, `lib/api` | the switch, and the page's way to it |
+| `lib/camera-switch`, `lib/api` | the camera's switch, and the page's way to it |
 | `lib/firewall` | the rule that keeps other users here out |
 | `lib/update` | the daily update |
-| `systemd/` | the services: `homelab-camera`, `homelab-motion` (path), `homelab-check` (timer), `homelab-api` (socket), `homelab-firewall`, `homelab-update` (timer) |
+| `systemd/` | the services: `homelab-camera` (and its path: on when the camera is), `homelab-motion` (path), `homelab-check` (timer), `homelab-api` (socket), `homelab-firewall`, `homelab-update` (timer) |
 | `www/index.html` | the page |
 | `test/run` | the tests, against a stand-in for ntfy and the camera |

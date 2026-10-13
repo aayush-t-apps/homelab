@@ -1,0 +1,16 @@
+[Unit]
+Description=Home: is the camera live? Tell once when it stops and when it's back; write the page's status
+
+[Service]
+Type=oneshot
+User=homecam
+Group=homecam
+SupplementaryGroups=alarm
+ExecStart=/opt/home/lib/check
+ProtectSystem=strict
+ReadWritePaths=/var/lib/home
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes

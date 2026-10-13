@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# home-firewall: on this machine, only the camera's own user and root (Tailscale, which shows
+# your devices the page) may open the camera (8080) and the page (8443). Other users here, such
+# as a Shipify box's agent runs, can't. Traffic to other machines is untouched.
+set -euo pipefail
+case ${1:-} in
+  up)
+    uid=$(id -u homecam)
+    /usr/sbin/nft -f - <<EOF
+table inet home
+delete table inet home
+table inet home {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    fib daddr type local tcp dport { 8080, 8443 } meta skuid { 0, $uid } accept
+    fib daddr type local tcp dport { 8080, 8443 } reject with tcp reset
+  }
+}
+EOF
+    ;;
+  down) /usr/sbin/nft delete table inet home 2>/dev/null || true ;;
+  *) echo "usage: firewall up|down" >&2; exit 2 ;;
+esac

@@ -1,0 +1,9 @@
+[Unit]
+Description=Home: send each new motion photo as an alarm
+
+[Path]
+PathChanged=/var/lib/home/data/motion
+Unit=home-motion.service
+
+[Install]
+WantedBy=paths.target

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# alarm: send one alarm to your phone, through the ntfy topic in /etc/home/alarm.conf.
+# Anything outside Shipify may raise one: the camera, a script, a timer. Only root and the
+# alarm group can read the topic, so only they can send.
+#
+#   alarm [-p priority] [-g tags] [-u link] "title" "message" [photo]
+#
+#   -p  1 (silent) to 5 (urgent); default 3
+#   -g  ntfy tags, comma-separated: emoji names such as warning or rotating_light
+#   -u  the page your phone opens when you tap the alarm
+set -euo pipefail
+
+conf=${ALARM_CONF:-/etc/home/alarm.conf}
+
+die() { echo "alarm: $*" >&2; exit 1; }
+usage() { sed -n '2,10s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+
+priority=3 tags='' link=''
+while getopts 'p:g:u:h' opt; do
+  case $opt in
+    p) priority=$OPTARG ;;
+    g) tags=$OPTARG ;;
+    u) link=$OPTARG ;;
+    *) usage ;;
+  esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 2 ] || [ $# -eq 3 ] || usage
+title=$1 message=$2 photo=${3:-}
+
+[[ $priority =~ ^[1-5]$ ]] || die "the priority is 1 to 5, not '$priority'"
+[ -r "$conf" ] || die "can't read $conf. Set it up with 'sudo ./install' (or 'sudo ./install alarm'); to send, be root or in the alarm group"
+url=$(sed -n 's/^ALARM_URL=//p' "$conf" | tail -n 1)
+[[ $url =~ ^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]{1,64}$ ]] || die "$conf has no valid ALARM_URL line. Run 'sudo ./install' again"
+
+# The topic is the secret: it reaches curl on stdin, never on a command line others can see.
+args=(--silent --show-error --max-time 30 --config - --write-out '\n%{http_code}'
+      --url-query "title=$title" --url-query "priority=$priority")
+[ -z "$tags" ] || args+=(--url-query "tags=$tags")
+[ -z "$link" ] || args+=(--url-query "click=$link")
+if [ -n "$photo" ]; then
+  [ -r "$photo" ] || die "can't read the photo $photo"
+  args+=(--upload-file "$photo" --url-query "filename=${photo##*/}" --url-query "message=$message")
+else
+  args+=(--data-raw "$message")
+fi
+
+out=$(printf 'url = "%s"\n' "$url" | curl "${args[@]}") || die "couldn't reach the alarm server (above): check this machine's internet"
+code=${out##*$'\n'}
+if [ "$code" != 200 ]; then
+  # Only ntfy's error text is shown: its full answer names the topic.
+  reason=$(printf '%s' "${out%$'\n'*}" | sed -n 's/.*"error": *"\([^"]*\)".*/\1/p')
+  die "the alarm server answered $code${reason:+: $reason}"
+fi

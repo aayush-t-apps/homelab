@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Tests alarm, motion-send and check against a stand-in for ntfy and the camera (test/fake_server.py).
+# Needs bash, curl 7.87+, jq and python3. Run: test/run
+set -euo pipefail
+cd "$(dirname "$0")/.."
+root=$PWD
+t=$(mktemp -d)
+server='' fake=''
+cleanup() {
+  [ -z "$server" ] || kill "$server" 2>/dev/null || true
+  [ -z "$fake" ] || kill "$fake" 2>/dev/null || true
+  rm -rf "$t"
+}
+trap cleanup EXIT
+
+port=$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 -I test/fake_server.py "$port" "$t" &
+server=$!
+for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$port/snapshot" && break; sleep 0.1; done
+
+export ALARM_CONF=$t/alarm.conf HOME_CONF=$t/home.conf HOME_VAR=$t/var ALARM_BIN=$root/bin/alarm \
+  CAMERA_URL=http://127.0.0.1:$port HOME_PROC=fake_mjpg SETTLE=0
+echo "ALARM_URL=http://127.0.0.1:$port/secret_topic_123" > "$ALARM_CONF"
+printf 'KEEP_DAYS=7\nPAGE=https://home.example.ts.net:8443\n' > "$HOME_CONF"
+mkdir -p "$HOME_VAR/state" "$HOME_VAR/data/motion"
+motion=$HOME_VAR/data/motion state=$HOME_VAR/state
+
+passed=0 failed=0
+expect() { # description, then a command that must succeed
+  local what=$1
+  shift
+  if "$@"; then passed=$((passed + 1)); else failed=$((failed + 1)); echo "✗ $what"; fi
+}
+sent() { [ -f "$t/requests.jsonl" ] && wc -l < "$t/requests.jsonl" || echo 0; }
+last() { tail -n 1 "$t/requests.jsonl" | jq -r "$1"; }
+is() { [ "$1" = "$2" ] || { echo "  got '$1', want '$2'"; return 1; }; }
+has() { case $1 in *"$2"*) ;; *) echo "  '$1' doesn't have '$2'"; return 1 ;; esac; }
+hasnt() { case $1 in *"$2"*) echo "  '$1' has '$2'"; return 1 ;; esac; }
+photo() { head -c "${2:-3000}" /dev/urandom > "$motion/$1"; touch -d "${3:-now}" "$motion/$1"; }
+
+# alarm
+bin/alarm -p 4 -g warning -u https://x.example "Title ü & co" "Hello & bye"
+expect "a text alarm is a POST to the topic" is "$(last .method) $(last .path)" "POST /secret_topic_123"
+expect "its title, priority, tags and link go as query" \
+  is "$(last '[.query.title, .query.priority, .query.tags, .query.click] | join("|")')" "Title ü & co|4|warning|https://x.example"
+expect "its message is the body" is "$(last .body)" "Hello & bye"
+
+head -c 5000 /dev/urandom > "$t/p.jpg"
+bin/alarm "With photo" "Look" "$t/p.jpg"
+expect "a photo alarm is a PUT of the photo" is "$(last .method) $(last .body_len)" "PUT 5000"
+expect "its message and file name go as query" is "$(last '.query.message + "|" + .query.filename')" "Look|p.jpg"
+
+echo 429 > "$t/status"
+out=$(bin/alarm "T" "M" 2>&1) && code=0 || code=$?
+rm "$t/status"
+expect "a refused alarm fails" is "$code" 1
+expect "and says why" has "$out" "answered 429: limit reached"
+expect "without showing the topic" hasnt "$out" secret_topic_123
+
+out=$(ALARM_CONF=$t/missing bin/alarm "T" "M" 2>&1) || true
+expect "no topic file says how to set it up" has "$out" "sudo ./install"
+echo "ALARM_URL=http://bad host/x y" > "$t/bad.conf"
+out=$(ALARM_CONF=$t/bad.conf bin/alarm "T" "M" 2>&1) || true
+expect "a broken topic file is refused" has "$out" "no valid ALARM_URL"
+out=$(bin/alarm -p 9 "T" "M" 2>&1) || true
+expect "a priority outside 1-5 is refused" has "$out" "1 to 5"
+
+# motion-send
+touch -d '1 hour ago' "$state/motion-sent"
+n=$(sent)
+lib/motion-send
+expect "no new photo, no alarm" is "$(sent)" "$n"
+
+photo 20261001_140000_motion_8.0%.jpg 3000 '10 minutes ago'
+photo 20261001_140500_motion_9.5%.jpg 4000 '5 minutes ago'
+photo debug_20261001_140500_frame1_motion_9.5%_current.jpg 100 '5 minutes ago'
+lib/motion-send
+expect "new photos make one alarm" is "$(sent)" "$((n + 1))"
+expect "with the newest photo" is "$(last .query.filename) $(last .body_len)" "20261001_140500_motion_9.5%.jpg 4000"
+expect "saying how many came with it" has "$(last .query.message)" "1 more since the last alarm"
+expect "and its title and link" is "$(last '.query.title + "|" + .query.click')" "Motion at home|https://home.example.ts.net:8443"
+lib/motion-send
+expect "a sent photo isn't sent again" is "$(sent)" "$((n + 1))"
+
+photo 20261001_141000_motion_7.0%.jpg 2000 '1 minute ago'
+echo 500 > "$t/status"
+lib/motion-send 2>/dev/null
+rm "$t/status"
+expect "an alarm that fails is noted for the page" has "$(cat "$state/alarm-error")" "answered 500"
+lib/motion-send
+expect "and its photo goes next time" is "$(last .query.filename)" "20261001_141000_motion_7.0%.jpg"
+expect "and the note is cleared" is "$([ -e "$state/alarm-error" ] && echo there || echo gone)" gone
+
+# check
+cp /bin/sleep "$t/fake_mjpg"
+"$t/fake_mjpg" 300 &
+fake=$!
+n=$(sent)
+echo frame-a > "$t/snapshot"
+lib/check
+expect "a working camera is on" is "$(jq -r .camera "$motion/../status.json")" on
+lib/check
+expect "the same picture twice is still on" is "$(jq -r .camera "$motion/../status.json")" on
+expect "and makes no alarm" is "$(sent)" "$n"
+lib/check
+expect "three times in a row is offline" is "$(jq -r .camera "$motion/../status.json")" off
+expect "with one alarm saying why" is "$(sent) $(last .query.title)" "$((n + 1)) Camera offline"
+expect "it says the picture stopped" has "$(last .body)" "stopped changing"
+sleep 0.2
+expect "and the camera program is started again" is "$(kill -0 "$fake" 2>/dev/null && echo running || echo stopped)" stopped
+lib/check
+expect "still frozen: no second alarm" is "$(sent)" "$((n + 1))"
+echo frame-b > "$t/snapshot"
+lib/check
+expect "a new picture is back on" is "$(jq -r .camera "$motion/../status.json")" on
+expect "with a quiet alarm" is "$(last '.query.title + " " + .query.priority')" "Camera back 2"
+rm "$t/snapshot"
+lib/check 2>/dev/null
+expect "a camera that doesn't answer is offline" is "$(last .query.title)" "Camera offline"
+expect "it says the camera isn't answering" has "$(last .body)" "isn't answering"
+
+today=$(date +%Y%m%d)
+photo "${today}_090000_motion_5.0%.jpg"
+photo "debug_${today}_090000_frame1_motion_5.0%_current.jpg" 100 '2 minutes ago'
+photo "20250101_090000_motion_5.0%.jpg" 100 '8 days ago'
+lib/check 2>/dev/null
+status=$motion/../status.json
+expect "old photos are deleted" is "$(find "$motion" -name '20250101_*' | wc -l)" 0
+expect "debug frames are deleted" is "$(find "$motion" -name 'debug_*' | wc -l)" 0
+expect "the page lists the newest photo first" is "$(jq -r '.photos[0]' "$status")" "${today}_090000_motion_5.0%.jpg"
+expect "and counts today's" is "$(jq -r .motion_today "$status")" 1
+expect "and says why it's offline" is "$(jq -r .note "$status")" "the camera isn't answering"
+
+echo
+echo "$passed passed, $failed failed"
+[ "$failed" = 0 ]

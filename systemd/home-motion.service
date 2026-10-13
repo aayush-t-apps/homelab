@@ -1,0 +1,16 @@
+[Unit]
+Description=Home: send the newest motion photo as an alarm
+
+[Service]
+Type=oneshot
+User=homecam
+Group=homecam
+SupplementaryGroups=alarm
+ExecStart=/opt/home/lib/motion-send
+ProtectSystem=strict
+ReadWritePaths=/var/lib/home/state
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes

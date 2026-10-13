@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# home-camera: the live stream on 127.0.0.1:8080, and a photo in /var/lib/home/data/motion
+# for each movement (mjpg-streamer and its motion plugin). Waits while the camera is unplugged.
+set -euo pipefail
+# shellcheck source=/dev/null
+. "${HOME_CONF:-/etc/home/home.conf}"
+m=/opt/home/mjpg
+
+if [ ! -e "$CAMERA" ]; then
+  echo "waiting for the camera at $CAMERA: plug it in"
+  until [ -e "$CAMERA" ]; do sleep 5; done
+fi
+
+exec "$m/mjpg_streamer" \
+  -i "$m/plugins/input_uvc.so -d $CAMERA -r $SIZE -f $FPS" \
+  -o "$m/plugins/output_http.so -l 127.0.0.1 -p 8080" \
+  -o "$m/plugins/output_motion.so $MOTION -f /var/lib/home/data/motion"

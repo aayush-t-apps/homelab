@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Home</title>
+<style>
+  :root {
+    --wall: #eef1ec; --panel: #e2e7df; --ink: #1e2b25; --muted: #5e6b64;
+    --ok: #2f7a4a; --alert: #b3261e; --brass: #8a6a22;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --wall: #0e1720; --panel: #16222e; --ink: #e4eaee; --muted: #93a1ab;
+      --ok: #5fc28a; --alert: #ff8a80; --brass: #d8b266;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--wall); color: var(--ink);
+    font: 17px/1.45 ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 14px; }
+  .checked { color: var(--muted); font-size: 14px; }
+  .view {
+    position: relative; aspect-ratio: 16 / 9; border-radius: 18px; overflow: hidden;
+    background: var(--panel);
+  }
+  .view img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .picture { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; }
+  .picture:focus-visible { outline: 3px solid var(--brass); outline-offset: -3px; border-radius: 18px; }
+  .live {
+    position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 7px;
+    padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 14px; font-weight: 600;
+    color: #fff; background: rgb(0 0 0 / 0.45);
+  }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4f; }
+  @media (prefers-reduced-motion: no-preference) {
+    .live::before { animation: beat 2s ease-in-out infinite; }
+    @keyframes beat { 50% { opacity: 0.35; } }
+  }
+  .offline {
+    position: absolute; inset: 0; display: grid; align-content: center; gap: 6px;
+    padding: 24px; text-align: center;
+  }
+  .offline strong { font-size: 20px; color: var(--alert); }
+  .offline span { color: var(--muted); }
+  .state { margin: 14px 2px 0; display: flex; gap: 10px; align-items: baseline; }
+  .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); transform: translateY(-1px); }
+  .dot.off { background: var(--alert); }
+  .state p { margin: 0; }
+  .state small { display: block; color: var(--muted); font-size: 15px; }
+  .error { margin: 12px 2px 0; color: var(--alert); font-size: 15px; }
+  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 12px; }
+  .photos { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 10px; }
+  @media (min-width: 560px) { .photos { grid-template-columns: repeat(3, 1fr); } }
+  .photos a { display: block; color: inherit; text-decoration: none; border-radius: 12px; }
+  .photos img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; background: var(--panel); }
+  .photos time { display: block; margin-top: 5px; font-size: 14px; color: var(--brass); }
+  .empty { color: var(--muted); margin: 0; }
+  a:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Home</h1>
+    <span class="checked" id="checked"></span>
+  </header>
+
+  <div class="view">
+    <button class="picture" id="picture" type="button" aria-label="Watch smoothly (uses more data)">
+      <img id="stream" alt="The camera, live">
+    </button>
+    <span class="live" id="live">Live</span>
+    <div class="offline" id="offline" hidden>
+      <strong id="offline-title">Camera offline</strong>
+      <span id="offline-note"></span>
+    </div>
+  </div>
+
+  <div class="state">
+    <span class="dot" id="dot"></span>
+    <p><span id="summary">Checking the camera…</span><small id="motion"></small></p>
+  </div>
+  <p class="error" id="error" hidden></p>
+
+  <h2>Motion photos</h2>
+  <ul class="photos" id="photos"></ul>
+  <p class="empty" id="empty" hidden>No motion photos yet. When something moves, its photo shows here and on your phone.</p>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const clock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  // A photo's name is when it was taken: 20261013_143025_motion_12.3%.jpg
+  function taken(name) {
+    const m = name.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+    return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+  }
+  function when(d) {
+    const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+    const day = days === 0 ? "Today" : days === 1 ? "Yesterday"
+      : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    return `${day}, ${clock(d)}`;
+  }
+
+  // The live view: a new picture every second, light on mobile data; tap it for the smooth
+  // stream. Paused while the page is hidden, and tried again if it drops.
+  let cameraOn = true, smooth = false, timer = 0;
+  const view = $("stream");
+  function next() {
+    clearTimeout(timer);
+    if (!cameraOn || document.hidden) { view.removeAttribute("src"); return; }
+    if (smooth) { view.src = `/stream?${Date.now()}`; return; }
+    const img = new Image();
+    img.onload = () => { view.src = img.src; timer = setTimeout(next, 1000); };
+    img.onerror = () => { timer = setTimeout(next, 5000); };
+    img.src = `/snapshot?${Date.now()}`;
+  }
+  view.addEventListener("error", () => { if (smooth && cameraOn) timer = setTimeout(next, 5000); });
+  $("picture").addEventListener("click", () => {
+    smooth = !smooth;
+    $("live").textContent = smooth ? "Live, smooth" : "Live";
+    $("picture").setAttribute("aria-label", smooth ? "Back to one picture a second" : "Watch smoothly (uses more data)");
+    next();
+  });
+  document.addEventListener("visibilitychange", next);
+
+  async function refresh() {
+    let s;
+    try {
+      const r = await fetch(`/data/status.json?${Date.now()}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status);
+      s = await r.json();
+    } catch {
+      $("summary").textContent = "Can't reach home. Check that Tailscale is on, then reload.";
+      $("dot").className = "dot off";
+      return;
+    }
+    const since = new Date(s.since);
+    const on = s.camera === "on";
+    if (on !== cameraOn) { cameraOn = on; next(); }
+    $("live").hidden = $("picture").hidden = !on;
+    $("offline").hidden = on;
+    $("dot").className = on ? "dot" : "dot off";
+    $("summary").textContent = on ? `Camera on since ${when(since)}.` : `Camera offline since ${when(since)}.`;
+    $("offline-note").textContent = `${s.note ? s.note[0].toUpperCase() + s.note.slice(1) + ". " : ""}It restarts by itself. If it's unplugged, plug it back in.`;
+    $("motion").textContent = s.motion_today === 0 ? "No motion today."
+      : `${s.motion_today} motion photo${s.motion_today === 1 ? "" : "s"} today.`;
+    $("checked").textContent = `Checked ${clock(new Date(s.updated))}`;
+
+    const err = s.alarm_error && s.alarm_error.match(/^(\S+) (?:alarm: )?(.*)$/);
+    $("error").hidden = !err;
+    if (err) $("error").textContent = `The last alarm didn't reach your phone (${clock(new Date(err[1]))}): ${err[2]}. The next one tries again.`;
+
+    const list = $("photos");
+    list.replaceChildren(...s.photos.map((name) => {
+      const d = taken(name), url = `/data/motion/${encodeURIComponent(name)}`;
+      const li = document.createElement("li"), a = document.createElement("a"), img = document.createElement("img"), t = document.createElement("time");
+      a.href = url; img.src = url; img.loading = "lazy"; img.alt = d ? `Motion, ${when(d)}` : "Motion";
+      if (d) { t.dateTime = d.toISOString(); t.textContent = when(d); }
+      a.append(img, t); li.append(a);
+      return li;
+    }));
+    $("empty").hidden = s.photos.length > 0;
+  }
+
+  next();
+  refresh();
+  setInterval(refresh, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+[Unit]
+Description=Home camera: the live stream and a photo for each movement
+Requires=home-firewall.service
+After=home-firewall.service network.target
+
+[Service]
+User=homecam
+Group=homecam
+SupplementaryGroups=video
+ExecStart=/opt/home/lib/camera-run
+Restart=always
+RestartSec=10
+# It sees only what it needs: the camera and its photos folder.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/home/data
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

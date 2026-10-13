@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# install: sets up home on this machine, one checked step at a time. Run it again any time: it
+# changes only what's different, and keeps your settings, your alarm topic and your photos.
+#
+#   sudo ./install                 the camera, its alarms and its page
+#   sudo ./install alarm           only the alarm command (another machine that should raise alarms)
+#   sudo ./install remove [--yes]  take everything away again
+#
+#   --topic NAME|URL               use this alarm topic: after a wipe, or to share one between machines
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+MJPG_REPO=https://github.com/350d/mjpg-streamer.git
+MJPG_COMMIT=3f178a01873149ce95c9defd2525c1795bfea9ad # tested on homepi, 2026-10-12
+ETC=/etc/home OPT=/opt/home VAR=/var/lib/home UNITS=/etc/systemd/system
+URL_RE='^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]{1,64}$'
+SERVICES=(home-firewall.service home-camera.service home-motion.path home-check.timer)
+
+step() { printf '\n%s\n' "$*"; }
+ok() { printf '  ✓ %s\n' "$*"; }
+warn() { printf '  ! %s\n' "$*"; }
+fail() { printf '  ✗ %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,9s/^# \{0,1\}//p' "$0"; exit "${1:-0}"; }
+
+mode=all topic='' yes='' new_topic=''
+asked=("$@")
+while [ $# -gt 0 ]; do
+  case $1 in
+    alarm | remove) mode=$1 ;;
+    --topic) topic=${2:-}; [ -n "$topic" ] || fail "--topic needs a name"; shift ;;
+    --yes) yes=1 ;;
+    -h | --help) usage ;;
+    *) printf 'unknown: %s\n\n' "$1" >&2; usage 2 ;;
+  esac
+  shift
+done
+
+[ "$(id -u)" = 0 ] || fail "run it with sudo: sudo $0 ${asked[*]}"
+if ! command -v apt-get >/dev/null || ! command -v systemctl >/dev/null; then
+  fail "this needs Linux with apt and systemd (Ubuntu, Debian, Raspberry Pi OS)"
+fi
+
+packages() {
+  local missing=() p
+  for p in "$@"; do
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || missing+=("$p")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "  installing ${missing[*]}"
+    if ! { apt-get update -qq && apt-get install -y -qq --no-install-recommends "${missing[@]}" >/dev/null; }; then
+      fail "couldn't install ${missing[*]}: check the internet, then run this again"
+    fi
+  fi
+  ok "packages: $*"
+}
+
+page_url() {
+  local name
+  name=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+  [ -z "$name" ] || echo "https://$name:8443"
+}
+
+alarms() {
+  step "Alarms"
+  getent group alarm >/dev/null || groupadd --system alarm
+  ok "group alarm: root and its members may send alarms"
+  install -d -m 755 "$ETC"
+  local conf=$ETC/alarm.conf url=
+  if [ -n "$topic" ]; then
+    case $topic in *://*) url=$topic ;; *) url=https://ntfy.sh/$topic ;; esac
+    new_topic=1
+  elif [ -r "$conf" ]; then
+    url=$(sed -n 's/^ALARM_URL=//p' "$conf" | tail -n 1)
+  fi
+  if [ -z "$url" ]; then
+    url=https://ntfy.sh/home-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
+    new_topic=1
+  fi
+  [[ $url =~ $URL_RE ]] || fail "'$url' isn't a topic: use letters, digits, - and _ (up to 64)"
+  (
+    umask 027
+    printf '# Your alarm topic. Whoever knows it can read your alarms: keep it private.\nALARM_URL=%s\n' "$url" > "$conf.new"
+  )
+  chown root:alarm "$conf.new" && mv "$conf.new" "$conf"
+  ok "topic: ${new_topic:+new, }in $conf (only root and the alarm group can read it)"
+  curl --help all 2>/dev/null | grep -q -- '--url-query' || fail "curl is too old (7.87 or later): sudo apt-get install curl"
+  install -m 755 "$here/bin/alarm" /usr/local/bin/alarm
+  ok "command: alarm \"title\" \"message\" [photo]"
+}
+
+subscribe() { # shows the topic to you only at a terminal, when it's new
+  [ -n "$new_topic" ] || return 0
+  if [ -t 0 ] && [ -t 1 ]; then
+    local url server
+    url=$(sed -n 's/^ALARM_URL=//p' "$ETC/alarm.conf")
+    server=${url#*://} server=${server%%/*}
+    step "Subscribe on your phone"
+    echo "  In the ntfy app: tap +, enter the topic ${url##*/}, and tap Subscribe."
+    [ "$server" = ntfy.sh ] || echo "  Use another server: $server"
+    read -r -p "  Press Enter when you've subscribed: " _
+  else
+    warn "subscribe in the ntfy app to the topic in $ETC/alarm.conf (sudo cat it)"
+  fi
+}
+
+camera_user() {
+  step "Camera user"
+  id homecam >/dev/null 2>&1 ||
+    useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin homecam
+  usermod -aG video,alarm homecam
+  ok "homecam: no login, no sudo; it can use the camera and send alarms, nothing else"
+}
+
+build() {
+  step "Camera program (mjpg-streamer ${MJPG_COMMIT:0:7})"
+  if [ "$(cat "$OPT/mjpg/commit" 2>/dev/null)" = "$MJPG_COMMIT" ]; then
+    ok "already built"
+    return
+  fi
+  local builder=${SUDO_USER:-nobody} tmp
+  tmp=$(mktemp -d)
+  chown "$builder" "$tmp"
+  echo "  building as $builder (a minute or two)"
+  # shellcheck disable=SC2016 # the inner script gets its values as arguments
+  runuser -u "$builder" -- env -i PATH=/usr/bin:/bin HOME="$tmp" bash -euc '
+    git init -q "$1/src" && cd "$1/src"
+    git fetch -q --depth 1 "$2" "$3" && git checkout -q FETCH_HEAD
+    [ "$(git rev-parse HEAD)" = "$3" ]
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build -j "$(nproc)"' _ "$tmp" "$MJPG_REPO" "$MJPG_COMMIT" > "$tmp/build.log" 2>&1 || {
+    tail -n 20 "$tmp/build.log" >&2
+    rm -rf "$tmp"
+    fail "the build failed (above): check the packages and the internet, then run this again"
+  }
+  install -d -m 755 "$OPT/mjpg/plugins"
+  install -m 755 "$tmp/src/build/mjpg_streamer" "$OPT/mjpg/"
+  local p
+  for p in input_uvc output_http output_motion; do
+    install -m 755 "$tmp/src/build/plugins/$p.so" "$OPT/mjpg/plugins/"
+  done
+  echo "$MJPG_COMMIT" > "$OPT/mjpg/commit"
+  rm -rf "$tmp"
+  ok "built into $OPT/mjpg"
+}
+
+files() {
+  step "Files"
+  install -d -m 755 "$OPT/lib" "$OPT/www"
+  install -m 755 "$here"/lib/{camera-run,motion-send,check,firewall} "$OPT/lib/"
+  install -m 644 "$here/www/index.html" "$OPT/www/"
+  ok "$OPT: the programs and the page"
+  if [ -f "$ETC/home.conf" ]; then
+    ok "$ETC/home.conf: kept your settings"
+  else
+    local cam=/dev/video0 c
+    for c in /dev/v4l/by-id/*-video-index0; do [ -e "$c" ] && cam=$c && break; done
+    cat > "$ETC/home.conf" <<EOF
+# Home settings. After a change: sudo systemctl restart home-camera
+# The camera. Its by-id name stays the same when you plug it into another port.
+CAMERA=$cam
+SIZE=1280x720
+FPS=15
+# Motion (mjpg-streamer's motion plugin): --motion how much must change (%), --sequence frames
+# in a row, --nframe check every nth frame, --downscale shrink first, --cooldown seconds between
+# photos; --zones focuses on parts of the picture (README). Long names only: -l doesn't work.
+MOTION="--downscale 4 --motion 5 --sequence 2 --nframe 2 --cooldown 120"
+# Motion photos older than this many days are deleted.
+KEEP_DAYS=7
+# The page your phone opens when you tap an alarm.
+PAGE=$(page_url)
+EOF
+    ok "$ETC/home.conf: written (camera $cam)"
+  fi
+  install -d -m 750 -o homecam -g homecam "$VAR" "$VAR/state" "$VAR/data" "$VAR/data/motion"
+  [ -e "$VAR/state/motion-sent" ] || install -m 640 -o homecam -g homecam /dev/null "$VAR/state/motion-sent"
+  ok "$VAR: photos and state, the camera user's only"
+}
+
+services() {
+  step "Services"
+  install -m 644 "$here"/systemd/* "$UNITS/"
+  systemctl daemon-reload
+  systemctl enable -q "${SERVICES[@]}"
+  if ! { systemctl restart home-firewall.service home-camera.service && systemctl start home-motion.path; }; then
+    fail "a service didn't start: journalctl -u home-firewall -u home-camera -n 20"
+  fi
+  ok "home-camera, home-motion, home-check (every minute), home-firewall: on now and at every start"
+}
+
+page() {
+  step "Page (your devices only, through Tailscale)"
+  if ! tailscale status >/dev/null 2>&1; then
+    warn "no Tailscale here: no page (alarms still work). Set up Tailscale, then run this again"
+    return
+  fi
+  { tailscale serve --bg --https=8443 --set-path / "$OPT/www" &&
+    tailscale serve --bg --https=8443 --set-path /data "$VAR/data" &&
+    tailscale serve --bg --https=8443 --set-path /stream http://127.0.0.1:8080/stream &&
+    tailscale serve --bg --https=8443 --set-path /snapshot http://127.0.0.1:8080/snapshot; } >/dev/null ||
+    fail "Tailscale didn't take the page (above): HTTPS must be on for your tailnet (Tailscale admin, DNS)"
+  ok "$(page_url)"
+}
+
+checks() {
+  step "Checks"
+  local tmp snap
+  tmp=$(mktemp -d)
+  snap=$tmp/camera.jpg
+  for _ in $(seq 20); do curl -sf -m 3 -o "$snap" http://127.0.0.1:8080/snapshot && break; sleep 1; done
+  if [ -s "$snap" ]; then
+    ok "the camera streams"
+    if runuser -u nobody -- curl -s -m 3 -o /dev/null http://127.0.0.1:8080/snapshot; then
+      fail "other users here can open the camera: the firewall isn't on (journalctl -u home-firewall)"
+    fi
+    ok "other users on this machine can't open it"
+  else
+    warn "the camera isn't streaming yet: $(journalctl -u home-camera -n 1 --no-pager -o cat)"
+  fi
+  systemctl start home-check.service || fail "the camera check failed: journalctl -u home-check"
+  ok "the camera check ran"
+  subscribe
+  if [ -s "$snap" ]; then
+    alarm -p 3 -g house -u "$(page_url)" "Home is set up" "This is how alarms look; the photo is the camera now." "$snap"
+  else
+    alarm -p 3 -g house "Home is set up" "This is how alarms look. The camera isn't streaming yet."
+  fi || fail "the test alarm didn't send (above)"
+  ok "a test alarm went to your topic"
+  rm -rf "$tmp"
+  local url
+  url=$(page_url)
+  if [ -n "$url" ] && curl -sf -m 10 -o /dev/null "$url/"; then ok "the page answers: $url"; fi
+}
+
+remove() {
+  step "Remove home: its services, page, programs, settings, alarm topic, photos, user and group"
+  if [ -z "$yes" ]; then
+    [ -t 0 ] || fail "say --yes to remove without a question"
+    read -r -p "  Type yes to remove it all: " answer
+    [ "$answer" = yes ] || fail "nothing removed"
+  fi
+  systemctl stop "${SERVICES[@]}" home-check.service home-motion.service 2>/dev/null || true
+  systemctl disable -q "${SERVICES[@]}" 2>/dev/null || true
+  rm -f "$UNITS"/home-{firewall.service,camera.service,motion.path,motion.service,check.timer,check.service}
+  systemctl daemon-reload
+  tailscale serve --https=8443 off >/dev/null 2>&1 || true
+  rm -rf "$OPT" "$VAR" "$ETC"
+  rm -f /usr/local/bin/alarm
+  if id homecam >/dev/null 2>&1; then userdel homecam; fi
+  if getent group alarm >/dev/null; then groupdel alarm; fi
+  ok "removed. The build packages stay (apt autoremove won't take them; remove them by hand if you like)"
+}
+
+case $mode in
+  remove) remove ;;
+  alarm)
+    step "Packages"
+    packages curl
+    alarms
+    subscribe
+    alarm -p 3 -g bell "Alarms work on $(hostname)" "Anything on this machine can now run: alarm \"title\" \"message\"" ||
+      fail "the test alarm didn't send (above)"
+    ok "a test alarm went to your topic"
+    ;;
+  all)
+    # No camera alarms while it restarts; the check comes back however this ends.
+    systemctl stop home-check.timer 2>/dev/null || true
+    trap 'systemctl start home-check.timer 2>/dev/null || true' EXIT
+    step "Packages"
+    packages cmake build-essential git pkg-config libjpeg-dev libturbojpeg0-dev libcurl4-openssl-dev \
+      v4l-utils curl jq nftables
+    alarms
+    camera_user
+    build
+    files
+    services
+    page
+    checks
+    step "Done. Wave at the camera: a photo alarm arrives. Unplug it: you hear within 3 minutes."
+    ;;
+esac

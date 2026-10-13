@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# home-motion: sends the newest motion photo as an alarm (home-motion.path runs it when one lands).
+# homelab-motion: sends the newest motion photo as an alarm (homelab-motion.path runs it when one lands).
 # Photos that arrive together go as one alarm: the newest, saying how many came with it. If the
 # alarm can't be sent, the photo stays unsent and goes with the next one; the page shows why.
 set -euo pipefail
 # shellcheck source=/dev/null
-. "${HOME_CONF:-/etc/home/home.conf}"
-var=${HOME_VAR:-/var/lib/home}
+. "${HOMELAB_CONF:-/etc/homelab/homelab.conf}"
+var=${HOMELAB_VAR:-/var/lib/homelab}
 alarm=${ALARM_BIN:-alarm}
 motion=$var/data/motion sent=$var/state/motion-sent
 

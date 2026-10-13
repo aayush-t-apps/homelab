@@ -1,0 +1,17 @@
+[Unit]
+Description=Homelab: one request to the page's switch
+
+[Service]
+User=homelab
+ExecStart=/opt/homelab/lib/api
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=20
+ReadWritePaths=/var/lib/homelab
+# Sandboxed: no view of /home or /srv, nothing to change but its own folder.
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes

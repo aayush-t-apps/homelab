@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Motion alarms on or off. Off is for when you're home: the camera still streams, but nothing
+# looks for motion, so no photos and no alarms. The camera restarts to take the change.
+#   motion-switch on|off
+set -euo pipefail
+var=${HOMELAB_VAR:-/var/lib/homelab}
+
+case ${1:-} in
+  on) touch "$var/state/motion-on" ;;
+  off) rm -f "$var/state/motion-on" ;;
+  *) echo "usage: motion-switch on|off" >&2; exit 2 ;;
+esac
+jq -n --arg motion "$1" --arg since "$(date -Iseconds)" '{motion: $motion, since: $since}' > "$var/data/motion.json.new"
+mv "$var/data/motion.json.new" "$var/data/motion.json"
+pkill -x -u "${HOMELAB_USER:-homelab}" "${HOMELAB_PROC:-mjpg_streamer}" || true

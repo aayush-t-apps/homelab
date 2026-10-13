@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# homelab-api: the page's switch for motion alarms. systemd hands it one connection at a time on
+# 127.0.0.1:8081 (homelab-api.socket), so nothing runs while nobody asks; Tailscale brings the
+# page's requests. A request must carry X-Homelab: 1, which another website can't add.
+#   POST /api/motion/on    POST /api/motion/off
+set -uo pipefail
+export LC_ALL=C
+var=${HOMELAB_VAR:-/var/lib/homelab}
+
+reply() { # status, json body
+  printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
+    "$1" "${#2}" "$2"
+  exit 0
+}
+
+IFS= read -r -t 5 line || exit 0
+line=${line%$'\r'}
+method=${line%% *} path=${line#* } path=${path%% *}
+marked=''
+while IFS= read -r -t 5 header; do
+  header=${header%$'\r'}
+  [ -n "$header" ] || break
+  name=${header%%:*} value=${header#*:} value=${value# }
+  if [ "${name,,}" = x-homelab ] && [ "$value" = 1 ]; then marked=1; fi
+done
+
+[ "$method" = POST ] || reply "405 Method Not Allowed" '{"error":"use POST"}'
+[ -n "$marked" ] || reply "403 Forbidden" '{"error":"only the page can switch this"}'
+case $path in
+  /api/motion/on) to=on ;;
+  /api/motion/off) to=off ;;
+  *) reply "404 Not Found" '{"error":"no such switch"}' ;;
+esac
+if ! err=$("${MOTION_SWITCH:-/opt/homelab/lib/motion-switch}" "$to" 2>&1); then
+  echo "switch failed: $err" >&2
+  reply "500 Internal Server Error" '{"error":"the switch failed: journalctl -u homelab-api@*"}'
+fi
+reply "200 OK" "$(cat "$var/data/motion.json")"

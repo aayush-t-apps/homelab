@@ -1,0 +1,20 @@
+[Unit]
+Description=Homelab camera: the live stream, and a photo of each movement while motion alarms are on
+Requires=homelab-firewall.service
+After=homelab-firewall.service network.target
+
+[Service]
+User=homelab
+ExecStart=/opt/homelab/lib/camera-run
+Restart=always
+RestartSec=3
+ReadWritePaths=/var/lib/homelab/data
+# Sandboxed: no view of /home or /srv, nothing to change but its own folder.
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

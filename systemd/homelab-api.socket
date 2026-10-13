@@ -1,0 +1,12 @@
+[Unit]
+Description=Homelab: the page's switch for motion alarms, on 127.0.0.1:8081
+Requires=homelab-firewall.service
+After=homelab-firewall.service
+
+[Socket]
+ListenStream=127.0.0.1:8081
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

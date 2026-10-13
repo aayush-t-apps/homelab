@@ -1,0 +1,14 @@
+[Unit]
+Description=Homelab: is the camera live? Tell once when it stops and when it's back; write the page's status
+
+[Service]
+Type=oneshot
+User=homelab
+ExecStart=/opt/homelab/lib/check
+ReadWritePaths=/var/lib/homelab
+# Sandboxed: no view of /home or /srv, nothing to change but its own folder.
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes

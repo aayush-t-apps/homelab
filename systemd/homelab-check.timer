@@ -1,5 +1,5 @@
 [Unit]
-Description=Home: check the camera every minute
+Description=Homelab: check the camera every minute
 
 [Timer]
 OnBootSec=1min

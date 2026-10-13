@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
-# home-camera: the live stream on 127.0.0.1:8080, and a photo in /var/lib/home/data/motion
-# for each movement (mjpg-streamer and its motion plugin). Waits while the camera is unplugged.
+# homelab-camera: the live stream on 127.0.0.1:8080 (mjpg-streamer). While motion alarms are on,
+# its motion plugin also saves a photo of each movement in /var/lib/homelab/data/motion.
+# Waits while the camera is unplugged.
 set -euo pipefail
 # shellcheck source=/dev/null
-. "${HOME_CONF:-/etc/home/home.conf}"
-m=/opt/home/mjpg
+. "${HOMELAB_CONF:-/etc/homelab/homelab.conf}"
+m=/opt/homelab/mjpg
 
 if [ ! -e "$CAMERA" ]; then
   echo "waiting for the camera at $CAMERA: plug it in"
   until [ -e "$CAMERA" ]; do sleep 5; done
 fi
 
+motion=()
+if [ -e /var/lib/homelab/state/motion-on ]; then
+  motion=(-o "$m/plugins/output_motion.so $MOTION --folder /var/lib/homelab/data/motion")
+  echo "motion alarms: on"
+else
+  echo "motion alarms: off (it only streams)"
+fi
+
 exec "$m/mjpg_streamer" \
   -i "$m/plugins/input_uvc.so -d $CAMERA -r $SIZE -f $FPS" \
   -o "$m/plugins/output_http.so -l 127.0.0.1 -p 8080" \
-  -o "$m/plugins/output_motion.so $MOTION -f /var/lib/home/data/motion"
+  "${motion[@]}"

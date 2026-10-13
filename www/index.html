@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Home</title>
+<title>Homelab</title>
 <style>
   :root {
     --wall: #eef1ec; --panel: #e2e7df; --ink: #1e2b25; --muted: #5e6b64;
@@ -56,6 +56,18 @@
   .state p { margin: 0; }
   .state small { display: block; color: var(--muted); font-size: 15px; }
   .error { margin: 12px 2px 0; color: var(--alert); font-size: 15px; }
+  .switch {
+    margin-top: 18px; padding: 14px 14px 14px 18px; border-radius: 16px; background: var(--panel);
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  }
+  .switch p { margin: 0; }
+  .switch small { display: block; color: var(--muted); font-size: 15px; }
+  .switch button {
+    flex: none; font: inherit; font-weight: 650; border: 0; border-radius: 999px; padding: 10px 18px;
+    background: var(--ink); color: var(--wall); cursor: pointer;
+  }
+  .switch button:disabled { opacity: 0.55; cursor: progress; }
+  .switch button:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
   h2 { font-size: 20px; font-weight: 700; margin: 36px 0 12px; }
   .photos { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 10px; }
   @media (min-width: 560px) { .photos { grid-template-columns: repeat(3, 1fr); } }
@@ -70,7 +82,7 @@
 <body>
 <main>
   <header>
-    <h1>Home</h1>
+    <h1>Homelab</h1>
     <span class="checked" id="checked"></span>
   </header>
 
@@ -90,6 +102,11 @@
     <p><span id="summary">Checking the camera…</span><small id="motion"></small></p>
   </div>
   <p class="error" id="error" hidden></p>
+
+  <div class="switch">
+    <p><span id="motion-state">Motion alarms…</span><small id="motion-note"></small></p>
+    <button type="button" id="motion-button" hidden></button>
+  </div>
 
   <h2>Motion photos</h2>
   <ul class="photos" id="photos"></ul>
@@ -172,9 +189,40 @@
     $("empty").hidden = s.photos.length > 0;
   }
 
+  // Motion alarms: off while you're home, on when you leave. The camera restarts to take it.
+  let motion = null;
+  function showMotion(m, note = "") {
+    motion = m;
+    const on = m.motion === "on";
+    $("motion-state").textContent = on ? `Motion alarms on since ${when(new Date(m.since))}.` : "Motion alarms off.";
+    $("motion-note").textContent = note || (on ? "Each movement sends a photo to your phone." : "Turn them on when you leave.");
+    const b = $("motion-button");
+    b.hidden = false; b.disabled = false;
+    b.textContent = on ? "Turn off" : "Turn on";
+  }
+  $("motion-button").addEventListener("click", async () => {
+    const to = motion && motion.motion === "on" ? "off" : "on", b = $("motion-button");
+    b.disabled = true; b.textContent = to === "on" ? "Turning on…" : "Turning off…";
+    try {
+      const r = await fetch(`/api/motion/${to}`, { method: "POST", headers: { "X-Homelab": "1" } });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `the switch answered ${r.status}`);
+      showMotion(body);
+    } catch (e) {
+      showMotion(motion, `Didn't switch: ${e.message}. Try again.`);
+    }
+  });
+  async function refreshMotion() {
+    try {
+      const r = await fetch(`/data/motion.json?${Date.now()}`, { cache: "no-store" });
+      if (r.ok) showMotion(await r.json());
+    } catch { /* the status line already says home can't be reached */ }
+  }
+
   next();
   refresh();
-  setInterval(refresh, 30000);
+  refreshMotion();
+  setInterval(() => { refresh(); refreshMotion(); }, 30000);
 </script>
 </body>
 </html>

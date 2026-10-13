@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install: sets up home on this machine, one checked step at a time. Run it again any time: it
+# install: sets up homelab on this machine, one checked step at a time. Run it again any time: it
 # changes only what's different, and keeps your settings, your alarm topic and your photos.
 #
 #   sudo ./install                 the camera, its alarms and its page
@@ -12,9 +12,9 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 MJPG_REPO=https://github.com/350d/mjpg-streamer.git
 MJPG_COMMIT=3f178a01873149ce95c9defd2525c1795bfea9ad # tested on homepi, 2026-10-12
-ETC=/etc/home OPT=/opt/home VAR=/var/lib/home UNITS=/etc/systemd/system
+ETC=/etc/homelab OPT=/opt/homelab VAR=/var/lib/homelab UNITS=/etc/systemd/system
 URL_RE='^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]{1,64}$'
-SERVICES=(home-firewall.service home-camera.service home-motion.path home-check.timer)
+SERVICES=(homelab-firewall.service homelab-camera.service homelab-motion.path homelab-check.timer homelab-api.socket)
 
 step() { printf '\n%s\n' "$*"; }
 ok() { printf '  ✓ %s\n' "$*"; }
@@ -42,8 +42,9 @@ fi
 
 packages() {
   local missing=() p
-  for p in "$@"; do
-    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || missing+=("$p")
+  for p in "$@"; do # there if apt has it, or its command is here (pkgconf gives pkg-config)
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || command -v "$p" >/dev/null ||
+      missing+=("$p")
   done
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "  installing ${missing[*]}"
@@ -73,7 +74,7 @@ alarms() {
     url=$(sed -n 's/^ALARM_URL=//p' "$conf" | tail -n 1)
   fi
   if [ -z "$url" ]; then
-    url=https://ntfy.sh/home-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
+    url=https://ntfy.sh/homelab-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
     new_topic=1
   fi
   [[ $url =~ $URL_RE ]] || fail "'$url' isn't a topic: use letters, digits, - and _ (up to 64)"
@@ -105,10 +106,10 @@ subscribe() { # shows the topic to you only at a terminal, when it's new
 
 camera_user() {
   step "Camera user"
-  id homecam >/dev/null 2>&1 ||
-    useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin homecam
-  usermod -aG video,alarm homecam
-  ok "homecam: no login, no sudo; it can use the camera and send alarms, nothing else"
+  id homelab >/dev/null 2>&1 ||
+    useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin homelab
+  usermod -aG video,alarm homelab
+  ok "homelab: no login, no sudo; it can use the camera and send alarms, nothing else"
 }
 
 build() {
@@ -146,16 +147,16 @@ build() {
 files() {
   step "Files"
   install -d -m 755 "$OPT/lib" "$OPT/www"
-  install -m 755 "$here"/lib/{camera-run,motion-send,check,firewall} "$OPT/lib/"
+  install -m 755 "$here"/lib/{camera-run,motion-send,check,firewall,api,motion-switch} "$OPT/lib/"
   install -m 644 "$here/www/index.html" "$OPT/www/"
   ok "$OPT: the programs and the page"
-  if [ -f "$ETC/home.conf" ]; then
-    ok "$ETC/home.conf: kept your settings"
+  if [ -f "$ETC/homelab.conf" ]; then
+    ok "$ETC/homelab.conf: kept your settings"
   else
     local cam=/dev/video0 c
     for c in /dev/v4l/by-id/*-video-index0; do [ -e "$c" ] && cam=$c && break; done
-    cat > "$ETC/home.conf" <<EOF
-# Home settings. After a change: sudo systemctl restart home-camera
+    cat > "$ETC/homelab.conf" <<EOF
+# Homelab settings. After a change: sudo systemctl restart homelab-camera
 # The camera. Its by-id name stays the same when you plug it into another port.
 CAMERA=$cam
 SIZE=1280x720
@@ -169,11 +170,17 @@ KEEP_DAYS=7
 # The page your phone opens when you tap an alarm.
 PAGE=$(page_url)
 EOF
-    ok "$ETC/home.conf: written (camera $cam)"
+    ok "$ETC/homelab.conf: written (camera $cam)"
   fi
-  install -d -m 750 -o homecam -g homecam "$VAR" "$VAR/state" "$VAR/data" "$VAR/data/motion"
-  [ -e "$VAR/state/motion-sent" ] || install -m 640 -o homecam -g homecam /dev/null "$VAR/state/motion-sent"
-  ok "$VAR: photos and state, the camera user's only"
+  install -d -m 750 -o homelab -g homelab "$VAR" "$VAR/state" "$VAR/data" "$VAR/data/motion"
+  [ -e "$VAR/state/motion-sent" ] || install -m 640 -o homelab -g homelab /dev/null "$VAR/state/motion-sent"
+  ok "$VAR: photos and state, the homelab user's only"
+  if [ ! -e "$VAR/data/motion.json" ]; then
+    runuser -u homelab -- "$OPT/lib/motion-switch" off
+    ok "motion alarms: off to start (turn them on from the page when you leave)"
+  else
+    ok "motion alarms: kept $(jq -r .motion "$VAR/data/motion.json")"
+  fi
 }
 
 services() {
@@ -181,10 +188,11 @@ services() {
   install -m 644 "$here"/systemd/* "$UNITS/"
   systemctl daemon-reload
   systemctl enable -q "${SERVICES[@]}"
-  if ! { systemctl restart home-firewall.service home-camera.service && systemctl start home-motion.path; }; then
-    fail "a service didn't start: journalctl -u home-firewall -u home-camera -n 20"
+  if ! { systemctl restart homelab-firewall.service homelab-camera.service homelab-api.socket &&
+    systemctl start homelab-motion.path; }; then
+    fail "a service didn't start: journalctl -u 'homelab-*' -n 20"
   fi
-  ok "home-camera, home-motion, home-check (every minute), home-firewall: on now and at every start"
+  ok "camera, motion photos, check (every minute), switch, firewall: on now and at every start"
 }
 
 page() {
@@ -196,7 +204,8 @@ page() {
   { tailscale serve --bg --https=8443 --set-path / "$OPT/www" &&
     tailscale serve --bg --https=8443 --set-path /data "$VAR/data" &&
     tailscale serve --bg --https=8443 --set-path /stream http://127.0.0.1:8080/stream &&
-    tailscale serve --bg --https=8443 --set-path /snapshot http://127.0.0.1:8080/snapshot; } >/dev/null ||
+    tailscale serve --bg --https=8443 --set-path /snapshot http://127.0.0.1:8080/snapshot &&
+    tailscale serve --bg --https=8443 --set-path /api http://127.0.0.1:8081/api; } >/dev/null ||
     fail "Tailscale didn't take the page (above): HTTPS must be on for your tailnet (Tailscale admin, DNS)"
   ok "$(page_url)"
 }
@@ -210,13 +219,16 @@ checks() {
   if [ -s "$snap" ]; then
     ok "the camera streams"
     if runuser -u nobody -- curl -s -m 3 -o /dev/null http://127.0.0.1:8080/snapshot; then
-      fail "other users here can open the camera: the firewall isn't on (journalctl -u home-firewall)"
+      fail "other users here can open the camera: the firewall isn't on (journalctl -u homelab-firewall)"
     fi
     ok "other users on this machine can't open it"
   else
-    warn "the camera isn't streaming yet: $(journalctl -u home-camera -n 1 --no-pager -o cat)"
+    warn "the camera isn't streaming yet: $(journalctl -u homelab-camera -n 1 --no-pager -o cat)"
   fi
-  systemctl start home-check.service || fail "the camera check failed: journalctl -u home-check"
+  [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/motion/off)" = 403 ] ||
+    fail "the page's switch doesn't answer: journalctl -u 'homelab-api*'"
+  ok "the page's switch answers (and refuses requests not from the page)"
+  systemctl start homelab-check.service || fail "the camera check failed: journalctl -u homelab-check"
   ok "the camera check ran"
   subscribe
   if [ -s "$snap" ]; then
@@ -232,20 +244,20 @@ checks() {
 }
 
 remove() {
-  step "Remove home: its services, page, programs, settings, alarm topic, photos, user and group"
+  step "Remove homelab: its services, page, programs, settings, alarm topic, photos, user and group"
   if [ -z "$yes" ]; then
     [ -t 0 ] || fail "say --yes to remove without a question"
     read -r -p "  Type yes to remove it all: " answer
     [ "$answer" = yes ] || fail "nothing removed"
   fi
-  systemctl stop "${SERVICES[@]}" home-check.service home-motion.service 2>/dev/null || true
+  systemctl stop "${SERVICES[@]}" homelab-check.service homelab-motion.service 'homelab-api@*' 2>/dev/null || true
   systemctl disable -q "${SERVICES[@]}" 2>/dev/null || true
-  rm -f "$UNITS"/home-{firewall.service,camera.service,motion.path,motion.service,check.timer,check.service}
+  rm -f "$UNITS"/homelab-{firewall.service,camera.service,motion.path,motion.service,check.timer,check.service,api.socket,api@.service}
   systemctl daemon-reload
   tailscale serve --https=8443 off >/dev/null 2>&1 || true
   rm -rf "$OPT" "$VAR" "$ETC"
   rm -f /usr/local/bin/alarm
-  if id homecam >/dev/null 2>&1; then userdel homecam; fi
+  if id homelab >/dev/null 2>&1; then userdel homelab; fi
   if getent group alarm >/dev/null; then groupdel alarm; fi
   ok "removed. The build packages stay (apt autoremove won't take them; remove them by hand if you like)"
 }
@@ -263,8 +275,8 @@ case $mode in
     ;;
   all)
     # No camera alarms while it restarts; the check comes back however this ends.
-    systemctl stop home-check.timer 2>/dev/null || true
-    trap 'systemctl start home-check.timer 2>/dev/null || true' EXIT
+    systemctl stop homelab-check.timer 2>/dev/null || true
+    trap 'systemctl start homelab-check.timer 2>/dev/null || true' EXIT
     step "Packages"
     packages cmake build-essential git pkg-config libjpeg-dev libturbojpeg0-dev libcurl4-openssl-dev \
       v4l-utils curl jq nftables
@@ -275,6 +287,7 @@ case $mode in
     services
     page
     checks
-    step "Done. Wave at the camera: a photo alarm arrives. Unplug it: you hear within 3 minutes."
+    step "Done. Open the page and turn motion alarms on to try them: wave, and a photo arrives.
+Unplug the camera: you hear within 3 minutes."
     ;;
 esac

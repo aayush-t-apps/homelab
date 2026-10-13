@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests alarm, motion-send and check against a stand-in for ntfy and the camera (test/fake_server.py).
+# Tests alarm, motion-send, check, motion-switch and api against a stand-in for ntfy and the camera (test/fake_server.py).
 # Needs bash, curl 7.87+, jq and python3. Run: test/run
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -18,12 +18,14 @@ python3 -I test/fake_server.py "$port" "$t" &
 server=$!
 for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$port/snapshot" && break; sleep 0.1; done
 
-export ALARM_CONF=$t/alarm.conf HOME_CONF=$t/home.conf HOME_VAR=$t/var ALARM_BIN=$root/bin/alarm \
-  CAMERA_URL=http://127.0.0.1:$port HOME_PROC=fake_mjpg SETTLE=0
+me=$(id -un)
+export ALARM_CONF=$t/alarm.conf HOMELAB_CONF=$t/homelab.conf HOMELAB_VAR=$t/var ALARM_BIN=$root/bin/alarm \
+  CAMERA_URL=http://127.0.0.1:$port HOMELAB_PROC=fake_mjpg HOMELAB_USER=$me SETTLE=0 \
+  MOTION_SWITCH=$root/lib/motion-switch
 echo "ALARM_URL=http://127.0.0.1:$port/secret_topic_123" > "$ALARM_CONF"
-printf 'KEEP_DAYS=7\nPAGE=https://home.example.ts.net:8443\n' > "$HOME_CONF"
-mkdir -p "$HOME_VAR/state" "$HOME_VAR/data/motion"
-motion=$HOME_VAR/data/motion state=$HOME_VAR/state
+printf 'KEEP_DAYS=7\nPAGE=https://home.example.ts.net:8443\n' > "$HOMELAB_CONF"
+mkdir -p "$HOMELAB_VAR/state" "$HOMELAB_VAR/data/motion"
+motion=$HOMELAB_VAR/data/motion state=$HOMELAB_VAR/state
 
 passed=0 failed=0
 expect() { # description, then a command that must succeed
@@ -62,8 +64,11 @@ expect "no topic file says how to set it up" has "$out" "sudo ./install"
 echo "ALARM_URL=http://bad host/x y" > "$t/bad.conf"
 out=$(ALARM_CONF=$t/bad.conf bin/alarm "T" "M" 2>&1) || true
 expect "a broken topic file is refused" has "$out" "no valid ALARM_URL"
-out=$(bin/alarm -p 9 "T" "M" 2>&1) || true
+out=$(bin/alarm -p 9 "T" "M" 2>&1) && code=0 || code=$?
 expect "a priority outside 1-5 is refused" has "$out" "1 to 5"
+expect "as wrong arguments (exit 2)" is "$code" 2
+bin/alarm "only a title" 2>/dev/null && code=0 || code=$?
+expect "a missing message is wrong arguments (exit 2)" is "$code" 2
 
 # motion-send
 touch -d '1 hour ago' "$state/motion-sent"
@@ -93,9 +98,11 @@ expect "and the note is cleared" is "$([ -e "$state/alarm-error" ] && echo there
 
 # check
 cp /bin/sleep "$t/fake_mjpg"
-"$t/fake_mjpg" 300 &
-fake=$!
+camera_program() { "$t/fake_mjpg" 300 & fake=$!; }
+running() { sleep 0.2; kill -0 "$fake" 2>/dev/null && echo running || echo stopped; }
+camera_program
 n=$(sent)
+status_file=$motion/../status.json
 echo frame-a > "$t/snapshot"
 lib/check
 expect "a working camera is on" is "$(jq -r .camera "$motion/../status.json")" on
@@ -106,17 +113,24 @@ lib/check
 expect "three times in a row is offline" is "$(jq -r .camera "$motion/../status.json")" off
 expect "with one alarm saying why" is "$(sent) $(last .query.title)" "$((n + 1)) Camera offline"
 expect "it says the picture stopped" has "$(last .body)" "stopped changing"
-sleep 0.2
-expect "and the camera program is started again" is "$(kill -0 "$fake" 2>/dev/null && echo running || echo stopped)" stopped
+expect "and the camera program is started again" is "$(running)" stopped
 lib/check
 expect "still frozen: no second alarm" is "$(sent)" "$((n + 1))"
 echo frame-b > "$t/snapshot"
 lib/check
 expect "a new picture is back on" is "$(jq -r .camera "$motion/../status.json")" on
 expect "with a quiet alarm" is "$(last '.query.title + " " + .query.priority')" "Camera back 2"
+n=$(sent)
 rm "$t/snapshot"
 lib/check 2>/dev/null
-expect "a camera that doesn't answer is offline" is "$(last .query.title)" "Camera offline"
+expect "one minute with no answer may be a restart: no alarm" is "$(sent) $(jq -r .camera "$status_file")" "$n on"
+echo frame-c > "$t/snapshot"
+lib/check
+expect "and an answer the next minute changes nothing" is "$(sent) $(jq -r .camera "$status_file")" "$n on"
+rm "$t/snapshot"
+lib/check 2>/dev/null
+lib/check 2>/dev/null
+expect "two minutes with no answer is offline" is "$(last .query.title)" "Camera offline"
 expect "it says the camera isn't answering" has "$(last .body)" "isn't answering"
 
 today=$(date +%Y%m%d)
@@ -124,12 +138,40 @@ photo "${today}_090000_motion_5.0%.jpg"
 photo "debug_${today}_090000_frame1_motion_5.0%_current.jpg" 100 '2 minutes ago'
 photo "20250101_090000_motion_5.0%.jpg" 100 '8 days ago'
 lib/check 2>/dev/null
-status=$motion/../status.json
+status=$status_file
 expect "old photos are deleted" is "$(find "$motion" -name '20250101_*' | wc -l)" 0
 expect "debug frames are deleted" is "$(find "$motion" -name 'debug_*' | wc -l)" 0
 expect "the page lists the newest photo first" is "$(jq -r '.photos[0]' "$status")" "${today}_090000_motion_5.0%.jpg"
 expect "and counts today's" is "$(jq -r .motion_today "$status")" 1
 expect "and says why it's offline" is "$(jq -r .note "$status")" "the camera isn't answering"
+
+# motion-switch
+camera_program
+lib/motion-switch on
+expect "on: the camera looks for motion" is "$([ -e "$state/motion-on" ] && echo yes)" yes
+expect "and the page sees it" is "$(jq -r .motion "$HOMELAB_VAR/data/motion.json")" on
+expect "and the camera restarts to take it" is "$(running)" stopped
+camera_program
+lib/motion-switch off
+expect "off: it doesn't" is "$([ -e "$state/motion-on" ] && echo yes || echo no) $(jq -r .motion "$HOMELAB_VAR/data/motion.json")" "no off"
+expect "and the camera restarts again" is "$(running)" stopped
+lib/motion-switch maybe 2>/dev/null && code=0 || code=$?
+expect "anything but on or off is refused" is "$code" 2
+
+# api: one HTTP request on stdin, the answer on stdout
+ask() { printf '%s\r\n' "$@" "" | lib/api; }
+code() { head -n 1 | cut -d' ' -f2; }
+expect "a GET is refused" is "$(ask "GET /api/motion/on HTTP/1.1" "X-Homelab: 1" | code)" 405
+expect "a POST without the page's header is refused" is "$(ask "POST /api/motion/on HTTP/1.1" "Host: x" | code)" 403
+expect "and changes nothing" is "$(jq -r .motion "$HOMELAB_VAR/data/motion.json")" off
+expect "an unknown switch is refused" is "$(ask "POST /api/lights/on HTTP/1.1" "X-Homelab: 1" | code)" 404
+answer=$(ask "POST /api/motion/on HTTP/1.1" "x-homelab: 1" "Content-Length: 0")
+expect "the page's request switches it on" is "$(printf '%s' "$answer" | code)" 200
+body=${answer#*$'\r\n\r\n'}
+expect "and answers with the new state" is "$(printf '%s' "$body" | jq -r .motion)" on
+expect "with the right length" has "$answer" "Content-Length: ${#body}"
+expect "and the camera looks for motion" is "$([ -e "$state/motion-on" ] && echo yes)" yes
+expect "off works too" is "$(ask "POST /api/motion/off HTTP/1.1" "X-Homelab: 1" | code) $([ -e "$state/motion-on" ] && echo yes || echo no)" "200 no"
 
 echo
 echo "$passed passed, $failed failed"

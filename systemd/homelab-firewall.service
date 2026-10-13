@@ -1,0 +1,12 @@
+[Unit]
+Description=Homelab: only its own user and Tailscale may open the camera, the switch and the page here
+Before=homelab-camera.service homelab-api.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/homelab/lib/firewall up
+ExecStop=/opt/homelab/lib/firewall down
+
+[Install]
+WantedBy=multi-user.target

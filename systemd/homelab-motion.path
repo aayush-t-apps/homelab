@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab: send each new motion photo as an alarm
+
+[Path]
+PathChanged=/var/lib/homelab/data/motion
+Unit=homelab-motion.service
+
+[Install]
+WantedBy=paths.target

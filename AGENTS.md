@@ -1,18 +1,21 @@
-# Home: agent guide
+# Homelab: agent guide
 
-The home camera and the `alarm` command (README.md). The owner applies every change on the machine
-with `sudo ./install`: your work ends at a PR.
+The home camera, its motion alarms, its page, and the `alarm` command (README.md). The owner
+applies every change on the machine with `sudo ./install`: your work ends at a PR.
 
 ## Rules
 
-- **Never read or print the alarm topic** (`/etc/home/alarm.conf`, `ALARM_URL`): whoever knows it
-  reads the owner's alarms. Tests use a stand-in server.
-- **Shipify never calls `alarm`,** and home never posts to Shipify: Shipify talks, home alarms.
-- **Keep it small:** bash, systemd units, one static page, coreutils, curl and jq. No new
-  long-running process, service or dependency without the owner's yes.
+- **Never read or print the alarm topic** (`/etc/homelab/alarm.conf`, `ALARM_URL`): whoever knows
+  it reads the owner's alarms and photos. Tests use a stand-in server.
+- **Shipify never calls `alarm`,** and homelab never posts to Shipify: Shipify talks, homelab alarms.
+- **Keep it small:** bash, systemd units, one static page, coreutils, curl and jq. Nothing new that
+  runs all the time, and no new service or dependency, without the owner's yes.
 - **Every failure says what to do,** in plain words, and nothing fails silently: the page shows
   the last alarm that didn't send.
-- **`install` stays idempotent:** a second run changes nothing, and keeps settings, topic and photos.
+- **`install` stays idempotent:** a second run changes nothing, and keeps settings, topic, switch
+  and photos.
+- **Only the homelab user and root reach the camera, the switch and the page** on the machine
+  (`lib/firewall`). A new local port goes into that rule.
 - **The camera program is pinned** (`MJPG_COMMIT` in `install`). Changing it is its own PR, tested
   on the camera. Its motion plugin takes long option names only (`--motion`, not `-l`).
 

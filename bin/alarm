@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# alarm: send one alarm to your phone, through the ntfy topic in /etc/home/alarm.conf.
+# alarm: send one alarm to your phone, through the ntfy topic in /etc/homelab/alarm.conf.
 # Anything outside Shipify may raise one: the camera, a script, a timer. Only root and the
 # alarm group can read the topic, so only they can send.
 #
@@ -10,7 +10,7 @@
 #   -u  the page your phone opens when you tap the alarm
 set -euo pipefail
 
-conf=${ALARM_CONF:-/etc/home/alarm.conf}
+conf=${ALARM_CONF:-/etc/homelab/alarm.conf}
 
 die() { echo "alarm: $*" >&2; exit 1; }
 usage() { sed -n '2,10s/^# \{0,1\}//p' "$0" >&2; exit 2; }
@@ -28,7 +28,7 @@ shift $((OPTIND - 1))
 [ $# -eq 2 ] || [ $# -eq 3 ] || usage
 title=$1 message=$2 photo=${3:-}
 
-[[ $priority =~ ^[1-5]$ ]] || die "the priority is 1 to 5, not '$priority'"
+[[ $priority =~ ^[1-5]$ ]] || { echo "alarm: the priority is 1 to 5, not '$priority'" >&2; exit 2; }
 [ -r "$conf" ] || die "can't read $conf. Set it up with 'sudo ./install' (or 'sudo ./install alarm'); to send, be root or in the alarm group"
 url=$(sed -n 's/^ALARM_URL=//p' "$conf" | tail -n 1)
 [[ $url =~ ^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]{1,64}$ ]] || die "$conf has no valid ALARM_URL line. Run 'sudo ./install' again"

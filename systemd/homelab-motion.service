@@ -1,0 +1,14 @@
+[Unit]
+Description=Homelab: send the newest motion photo as an alarm
+
+[Service]
+Type=oneshot
+User=homelab
+ExecStart=/opt/homelab/lib/motion-send
+ReadWritePaths=/var/lib/homelab/state
+# Sandboxed: no view of /home or /srv, nothing to change but its own folder.
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/srv
+PrivateTmp=yes
+NoNewPrivileges=yes

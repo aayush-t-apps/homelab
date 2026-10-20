@@ -16,11 +16,20 @@ runs for it.
  page: live view, switch ◄── Tailscale (your devices only) ◄────────── browser: the page
 ```
 
-- **The camera is off to start,** and whenever you're home: it isn't used at all, nothing is seen
-  or saved, and nothing runs for it. Turn it on from the page when you leave, off when you're back.
-  The machine remembers it, through restarts and updates.
+- **The page's switch has three positions,** and the machine remembers it, through restarts and
+  updates:
+  - **Off,** to start and whenever you're home: the camera isn't used at all, nothing is seen or
+    saved, and nothing runs for it.
+  - **Live view:** the camera stays on for the page, with no motion detection: no motion photos,
+    no motion alarms, and less work for the machine. For a camera you keep on all the time.
+  - **Motion alarms,** when you leave: the live view, and a photo to your phone for each movement
+    (below).
+
+  Between live view and motion alarms, the camera program restarts: the view is back in a few
+  seconds.
 - **On,** [mjpg-streamer](https://github.com/350d/mjpg-streamer) (at the version tested here)
-  streams the camera at 1280x720, and its motion plugin saves a photo when something moves.
+  streams the camera at 1280x720, and with motion alarms its motion plugin saves a photo when
+  something moves.
   - **Your phone** gets an alarm about a second after you walk into view, with a frame taken half a
     second after the movement began, so whoever moved is in it.
   - **The page** then gets three more frames, half a second apart, so you see what happened; and
@@ -30,7 +39,7 @@ runs for it.
     still gets every photo, and alarms return at midnight.
   - **Light isn't someone:** the first 10 seconds after the camera starts (its light settling)
     and a change of almost the whole picture at once (a lamp switched on) are ignored.
-- **Camera health,** while it's on: a check every minute. If the picture stops (unplugged, or
+- **Camera health,** while it's on (live view or motion alarms): a check every minute. If the picture stops (unplugged, or
   stuck), you hear once, it restarts by itself, and you hear again when it's back.
 - **The page:** the live view, the switch, the camera's state and the last week's motion photos.
   Tapping an alarm opens it.
@@ -85,8 +94,8 @@ One checked step at a time; a step that fails says what to fix:
 7. checks it all, and sends a test alarm with the camera's picture;
 8. sets up the daily update (below).
 
-**Try it:** open the page, tap **Turn on**, wave at the camera: a photo arrives. Unplug it:
-"Camera offline" within 3 minutes; plug it back in: "Camera back". Tap **Turn off** when done.
+**Try it:** open the page, tap **Motion alarms**, wave at the camera: a photo arrives. Unplug it:
+"Camera offline" within 3 minutes; plug it back in: "Camera back". Tap **Off** when done.
 
 Running it again is safe: it changes only what's different, and keeps your settings, topic,
 switch and photos. After a wipe, `sudo /opt/homelab/src/install --topic` keeps the topic you're subscribed to:
@@ -94,7 +103,8 @@ it asks for it (ntfy shows it), so it never shows on a command line.
 
 ## Every day
 
-- **Leaving:** open the page, **Turn on**. **Back:** **Turn off**.
+- **Leaving:** open the page, **Motion alarms**. **Back:** **Off**, or **Live view** to keep
+  watching without motion alarms.
 - **An alarm:** tap it for the page. The live view is smooth (about 7 Mbit/s); tap the picture for
   one picture a second, which saves mobile data (it starts that way when your phone saves data).
 - **Someone else** can subscribe to the same topic in their ntfy app.
@@ -183,7 +193,7 @@ Homelab shares homepi with a Shipify box. They don't touch:
 
 | You see | Do |
 |---|---|
-| No alarms at all | Subscribed to the topic in ntfy? Muted? Camera on? Running the install again at the machine sends a test alarm |
+| No alarms at all | Subscribed to the topic in ntfy? Muted? The switch on **Motion alarms**? Running the install again at the machine sends a test alarm |
 | "Camera offline" and it stays | Plug the camera in, or try another USB port. `journalctl -u homelab-camera -n 20` |
 | Too many motion alarms | Raise `--motion` or `--cooldown`, or use `--zones` to skip a busy part |
 | Missed motion | Lower `--motion` or `--sequence` |
@@ -206,7 +216,7 @@ Logs: `journalctl -u 'homelab-*'`. Status: `systemctl list-units 'homelab-*'`.
 |---|---|
 | `install` | the one command: set up, `alarm`, `remove` |
 | `bin/alarm` | the alarm command |
-| `lib/camera-run` | starts the camera program (only while the camera is on) |
+| `lib/camera-run` | starts the camera program (only while the camera is on), with motion detection or without |
 | `lib/motion-send` | sends a new motion photo as an alarm |
 | `lib/check` | the minute check: camera health and old photos |
 | `lib/status` | the page's status: written by the check, a new photo and the switch |

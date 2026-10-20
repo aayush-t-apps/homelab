@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # homelab-camera: while the camera is on, the live stream on 127.0.0.1:8080 (mjpg-streamer) and,
-# with its motion plugin, a photo of each movement in /var/lib/homelab/data/motion. systemd starts
-# it only while the camera is on (homelab-camera.path). Waits while the camera is unplugged.
+# with its motion plugin, a photo of each movement in /var/lib/homelab/data/motion. View only, the
+# live stream without the motion plugin. systemd starts it only while the camera is on or view only
+# (homelab-camera.path). Waits while the camera is unplugged.
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${HOMELAB_DEFAULTS:-/opt/homelab/defaults.conf}"
 # shellcheck source=/dev/null
 . "${HOMELAB_CONF:-/etc/homelab/homelab.conf}"
-m=/opt/homelab/mjpg on=/var/lib/homelab/state/camera-on
+var=${HOMELAB_VAR:-/var/lib/homelab}
+m=${HOMELAB_MJPG:-/opt/homelab/mjpg} on=$var/state/camera-on
 
 if [ ! -e "$CAMERA" ]; then
   echo "waiting for the camera at $CAMERA: plug it in"
@@ -17,8 +19,9 @@ if [ ! -e "$CAMERA" ]; then
   done
 fi
 
-date +%s > /var/lib/homelab/state/camera-started # motion-send ignores the warm-up
-exec "$m/mjpg_streamer" \
-  -i "$m/plugins/input_uvc.so -d $CAMERA -r $SIZE -f $FPS" \
-  -o "$m/plugins/output_http.so -l 127.0.0.1 -p 8080" \
-  -o "$m/plugins/output_motion.so $MOTION --folder /var/lib/homelab/data/motion"
+out=(-o "$m/plugins/output_http.so -l 127.0.0.1 -p 8080")
+if [ "$(cat "$on" 2>/dev/null)" != view ]; then
+  date +%s > "$var/state/camera-started" # motion-send ignores the warm-up
+  out+=(-o "$m/plugins/output_motion.so $MOTION --folder $var/data/motion")
+fi
+exec "$m/mjpg_streamer" -i "$m/plugins/input_uvc.so -d $CAMERA -r $SIZE -f $FPS" "${out[@]}"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests alarm, motion-send, check, camera-switch, api and update against a stand-in for ntfy and the camera (test/fake_server.py).
+# Tests alarm, motion-send, check, camera-switch, camera-run, api and update against a stand-in for ntfy and the camera (test/fake_server.py).
 # Needs bash, curl 7.87+, jq and python3. Run: test/run
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -242,8 +242,37 @@ echo frame-d > "$t/snapshot"
 lib/check
 expect "a camera turned on is live, with no 'Camera back'" is "$(sent) $(jq -r .camera "$status_file")" "$n live"
 expect "since you turned it on" is "$(jq -r .since "$status_file")" "$(jq -r .since "$HOMELAB_VAR/data/camera.json")"
+lib/camera-switch view
+expect "view: the camera is to run, view only" is "$(cat "$state/camera-on") $(jq -r .camera "$HOMELAB_VAR/data/camera.json")" "view view"
+expect "and the page knows" is "$(jq -r '.camera + " " + .mode' "$status_file")" "live view"
+expect "and it's stopped, for systemd to start it again without motion detection" is "$(running)" stopped
+camera_program
+lib/camera-switch view
+expect "view again: nothing is stopped" is "$(running)" running
+lib/camera-switch on
+expect "and back to on: it starts again, with motion detection" is "$(running) $(cat "$state/camera-on")" "stopped on"
+camera_program
+: > "$state/camera-on"
+lib/camera-switch on
+expect "an older version's empty switch is on: nothing is stopped" is "$(running)" running
 lib/camera-switch maybe 2>/dev/null && code=0 || code=$?
-expect "anything but on or off is refused" is "$code" 2
+expect "anything but on, view or off is refused" is "$code" 2
+
+# camera-run: the motion plugin while on, not while view only
+mkdir "$t/mjpg"
+printf '#!/bin/sh\necho "$@"\n' > "$t/mjpg/mjpg_streamer"
+chmod +x "$t/mjpg/mjpg_streamer"
+touch "$t/video0"
+settings "CAMERA=$t/video0"
+lib/camera-switch on
+args=$(HOMELAB_MJPG=$t/mjpg lib/camera-run)
+expect "on: the live stream" has "$args" "output_http.so -l 127.0.0.1 -p 8080"
+expect "and motion detection" has "$args" "output_motion.so --downscale 4"
+lib/camera-switch view
+args=$(HOMELAB_MJPG=$t/mjpg lib/camera-run)
+expect "view: the live stream" has "$args" "output_http.so -l 127.0.0.1 -p 8080"
+expect "and no motion detection" hasnt "$args" "output_motion"
+settings
 
 # api: one HTTP request on stdin, the answer on stdout
 ask() { printf '%s\r\n' "$@" "" | lib/api; }
@@ -259,6 +288,10 @@ body=${answer#*$'\r\n\r\n'}
 expect "and answers with the new state" is "$(printf '%s' "$body" | jq -r .camera)" on
 expect "with the right length" has "$answer" "Content-Length: ${#body}"
 expect "and the camera is to run" is "$([ -e "$state/camera-on" ] && echo yes)" yes
+answer=$(ask "POST /api/camera/view HTTP/1.1" "X-Homelab: 1")
+expect "the page's request switches it to view only" is "$(printf '%s' "$answer" | code) ${answer#*$'\r\n\r\n'}" \
+  "200 $(cat "$HOMELAB_VAR/data/camera.json")"
+expect "and it is view only" is "$(jq -r .camera "$HOMELAB_VAR/data/camera.json")" view
 expect "off works too" is "$(ask "POST /api/camera/off HTTP/1.1" "X-Homelab: 1" | code) $([ -e "$state/camera-on" ] && echo yes || echo no)" "200 no"
 
 # update: a throwaway origin, a clone of it, and a stand-in install

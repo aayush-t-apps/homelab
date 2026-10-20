@@ -52,19 +52,24 @@
   .quiet.alert strong { color: var(--alert); }
   .view + .camera { margin-top: 14px; }
   .camera { padding: 14px 14px 14px 18px; border-radius: 16px; background: var(--panel);
-    display: flex; align-items: center; gap: 12px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
   }
   .dot { flex: none; align-self: flex-start; margin-top: 8px; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   .dot.live { background: var(--ok); }
   .dot.offline { background: var(--alert); }
   .camera p { margin: 0; flex: 1; }
   .camera small { display: block; color: var(--muted); font-size: 15px; }
-  .camera button {
-    flex: none; font: inherit; font-weight: 650; border: 0; border-radius: 999px; padding: 10px 18px;
-    background: var(--ink); color: var(--wall); cursor: pointer;
+  .switch {
+    flex: 1 0 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+    padding: 4px; border-radius: 999px; background: var(--wall);
   }
-  .camera button:disabled { opacity: 0.55; cursor: progress; }
-  .camera button:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
+  .switch button {
+    font: inherit; font-size: 15px; font-weight: 650; border: 0; border-radius: 999px; padding: 9px 6px;
+    background: none; color: var(--ink); cursor: pointer;
+  }
+  .switch button[aria-pressed="true"] { background: var(--ink); color: var(--wall); }
+  .switch button:disabled { opacity: 0.55; cursor: progress; }
+  .switch button:focus-visible { outline: 3px solid var(--brass); outline-offset: 2px; }
   .error { margin: 12px 2px 0; color: var(--alert); font-size: 15px; }
   .photos-head { display: flex; align-items: baseline; justify-content: space-between; margin: 36px 0 12px; }
   h2 { font-size: 20px; font-weight: 700; margin: 0; }
@@ -100,7 +105,11 @@
   <div class="camera">
     <span class="dot" id="dot"></span>
     <p><span id="state">Checking the camera…</span><small id="note"></small></p>
-    <button type="button" id="switch" hidden></button>
+    <div class="switch" id="switch" role="group" aria-label="Camera" hidden>
+      <button type="button" data-to="off">Off</button>
+      <button type="button" data-to="view">Live view</button>
+      <button type="button" data-to="on">Motion alarms</button>
+    </div>
   </div>
   <p class="error" id="error" hidden></p>
 
@@ -109,7 +118,7 @@
     <span id="today"></span>
   </div>
   <ul class="photos" id="photos"></ul>
-  <p class="empty" id="empty" hidden>No motion photos yet. While the camera is on, each movement's photo shows here and on your phone.</p>
+  <p class="empty" id="empty" hidden>No motion photos yet. While motion alarms are on, each movement's photo shows here and on your phone.</p>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
@@ -157,8 +166,10 @@
   document.addEventListener("visibilitychange", next);
 
   function render() {
-    const on = switched ? switched.camera === "on" : status ? status.camera !== "off" : null;
-    if (on === null) return;
+    // The switch: on (live view and motion alarms), view (live view only) or off.
+    const mode = switched ? switched.camera : status ? status.mode || (status.camera === "off" ? "off" : "on") : null;
+    if (mode === null) return;
+    const on = mode !== "off";
     // The minute check counts only if it ran since the last switch.
     const fresh = status && (!switched || new Date(status.updated) >= new Date(switched.since));
     const health = !on ? "off" : seen ? "live" : fresh && status.camera === "offline" ? "offline"
@@ -178,10 +189,12 @@
     $("dot").className = `dot ${health}`;
 
     const text = {
-      live: [`Camera on${at}.`, "Each movement sends a photo to your phone."],
+      live: mode === "view"
+        ? [`Live view${at}.`, "No motion detection: no motion photos or alarms."]
+        : [`Camera on${at}.`, "Each movement sends a photo to your phone."],
       starting: ["Camera on.", "Starting…"],
       offline: [`Camera offline${at}.`, "You heard about it once; you'll hear again when it's back."],
-      off: [`Camera off${at}.`, "It isn't in use: nothing is seen or saved. Turn it on when you leave."],
+      off: [`Camera off${at}.`, "It isn't in use: nothing is seen or saved. Turn on motion alarms when you leave."],
     }[health];
     $("state").textContent = text[0];
     $("note").textContent = problem || text[1];
@@ -189,14 +202,20 @@
     $("quiet-note").textContent = health === "offline"
       ? `${status && status.note ? status.note[0].toUpperCase() + status.note.slice(1) + ". " : ""}It restarts by itself; if it's unplugged, plug it back in.`
       : "";
-    const b = $("switch");
-    b.hidden = false; b.disabled = false;
-    b.textContent = on ? "Turn off" : "Turn on";
+    $("switch").hidden = false;
+    for (const b of $("switch").children) {
+      b.disabled = false;
+      b.setAttribute("aria-pressed", b.dataset.to === mode);
+    }
   }
 
-  $("switch").addEventListener("click", async () => {
-    const to = $("switch").textContent === "Turn on" ? "on" : "off", b = $("switch");
-    b.disabled = true; b.textContent = to === "on" ? "Turning on…" : "Turning off…";
+  $("switch").addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b || b.getAttribute("aria-pressed") === "true") return;
+    const to = b.dataset.to;
+    for (const other of $("switch").children) {
+      other.disabled = true; other.setAttribute("aria-pressed", other === b);
+    }
     try {
       const r = await fetch(`/api/camera/${to}`, { method: "POST", headers: { "X-Homelab": "1" } });
       const body = await r.json().catch(() => ({}));
@@ -206,6 +225,8 @@
       problem = `Didn't switch: ${e.message}. Try again.`;
     }
     render();
+    // Between live view and motion alarms the camera restarts: open the view again.
+    if (watching) next();
   });
 
   async function refresh() {

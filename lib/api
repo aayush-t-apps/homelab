@@ -2,7 +2,7 @@
 # homelab-api: the page's switch for the camera. systemd hands it one connection at a time on
 # 127.0.0.1:8081 (homelab-api.socket), so nothing runs while nobody asks; Tailscale brings the
 # page's requests. A request must carry X-Homelab: 1, which another website can't add.
-#   POST /api/camera/on    POST /api/camera/off
+#   POST /api/camera/on    POST /api/camera/view    POST /api/camera/off
 set -uo pipefail
 export LC_ALL=C
 var=${HOMELAB_VAR:-/var/lib/homelab}
@@ -28,6 +28,7 @@ done
 [ -n "$marked" ] || reply "403 Forbidden" '{"error":"only the page can switch this"}'
 case $path in
   /api/camera/on) to=on ;;
+  /api/camera/view) to=view ;;
   /api/camera/off) to=off ;;
   *) reply "404 Not Found" '{"error":"no such switch"}' ;;
 esac

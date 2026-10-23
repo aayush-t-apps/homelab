@@ -175,6 +175,8 @@ Homelab shares homepi with a Shipify box. They don't touch:
 - **Its own user, folders and services:** `homelab`; `/opt/homelab`, `/etc/homelab`,
   `/var/lib/homelab`; `homelab-*`. Each service is sandboxed: no view of `/home` or `/srv`, and
   it writes only to its own folder.
+- **The plan:** Shipify moves to a laptop, and the Pi runs only homelab:
+  [docs/home-setup.md](docs/home-setup.md).
 
 ## Updates, and removing it
 
